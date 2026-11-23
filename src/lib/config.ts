@@ -80,6 +80,14 @@ export function getFetchDays(): number {
   return positiveNumber('DMARC_FETCH_DAYS', 90);
 }
 
+/**
+ * Folder for data that is the admin's own and cannot be re-created (approved
+ * senders, DNS history). Unlike `.cache`, it should not be deleted casually.
+ */
+export function getDataDir(): string {
+  return process.env.DMARC_DATA_DIR || '.data';
+}
+
 /** Folder for the small local state file (last sync / last review). */
 export function getStateDir(): string {
   return process.env.DMARC_STATE_DIR || '.cache/state';

@@ -32,6 +32,13 @@ export interface WorsenedSource {
   failedBoth: number;
 }
 
+/** A change seen in a domain's DNS records (from the DNS history). */
+export interface DnsEvent {
+  domain: string;
+  at: string;
+  changes: Array<{ summary: string }>;
+}
+
 export interface DomainChange {
   domain: string;
   newReports: number;
@@ -44,6 +51,8 @@ export interface DomainChange {
   readinessChange: { from: ReadinessStatus; to: ReadinessStatus } | null;
   newSources: NewSource[];
   worsenedSources: WorsenedSource[];
+  /** DNS record changes seen after the review. */
+  dnsChanges: Array<{ at: string; summary: string }>;
 }
 
 export interface Changes {
@@ -81,6 +90,7 @@ export function computeChanges(
   entries: AggregateEntry[],
   reviewedAt: string | null,
   now: number = Date.now(),
+  dnsEvents: DnsEvent[] = [],
 ): Changes {
   if (!reviewedAt || Number.isNaN(Date.parse(reviewedAt))) {
     return {
@@ -177,6 +187,11 @@ export function computeChanges(
       readinessChange,
       newSources,
       worsenedSources,
+      dnsChanges: dnsEvents
+        .filter((e) => e.domain === domain && Date.parse(e.at) > reviewedMs)
+        .flatMap((e) =>
+          e.changes.map((c) => ({ at: e.at, summary: c.summary })),
+        ),
     });
   }
 
@@ -187,7 +202,8 @@ export function computeChanges(
       d.policyChange ||
       d.readinessChange ||
       d.newSources.length > 0 ||
-      d.worsenedSources.length > 0,
+      d.worsenedSources.length > 0 ||
+      d.dnsChanges.length > 0,
   );
 
   return {

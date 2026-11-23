@@ -38,7 +38,8 @@ src/
 │   ├── cache/report-cache.ts         # On-disk cache of parsed reports
 │   ├── state/store.ts                # Last sync / last review times
 │   ├── dashboard/                    # aggregate, readiness, changes, overview (pure logic)
-│   ├── dns/                          # records (DMARC/SPF/DKIM check), reverse (PTR)
+│   ├── dns/                          # records (DMARC/SPF/DKIM check), spf (lookup counter), history, reverse (PTR)
+│   ├── data/store.ts                 # JSON store for your own data (.data/)
 │   ├── dmarc/                        # parser, attachments, identity matching
 │   ├── format-date.ts                # DD.MM.YYYY formatting
 │   └── email/send-report.ts          # Email sender (disabled)
@@ -96,6 +97,7 @@ Secrets are read only from environment variables (never hard-coded). Put them in
 | `DMARC_CACHE_TTL_HOURS` | Optional cache lifetime (default `2160`, i.e. 90 days) |
 | `DMARC_CACHE_MAX_ENTRIES` | Optional cache size cap (default `5000`) |
 | `DMARC_REPORT_ADDRESS` | Optional address that receives the reports; the DNS check verifies `rua=` includes it |
+| `DMARC_DATA_DIR` | Optional folder for your own data such as the DNS history (default `.data`, git-ignored) |
 | `DMARC_STATE_DIR` | Optional folder for the last-sync and last-review times (default `.cache/state`) |
 | `DMARC_DNS_CACHE_DIR` | Optional folder for cached reverse-DNS lookups (default `.cache/dns`) |
 
@@ -201,6 +203,16 @@ DMARC was revised in May 2026 (RFC 9989, 9990, 9991). The app reads both the ori
 - `pct` is gone in the new format. When a report has no `pct` the policy is treated as applying to all failing mail, and the app never shows `NaN` or `undefined`. Optional tags (`sp`, `adkim`, `aspf`) are shown as "same as p" or "relaxed (default)" when absent.
 - `t=y` (testing) means receivers do **not** apply the policy, like the old `pct=0`. Readiness treats `p=quarantine` with `t=y` as *not enforced* and tells you to remove `t=y` once the checks pass.
 - New tags `np`, `testing`, `discovery_method`, `version` and `generator` are read and shown where useful. The DNS check explains `pct`, `rf` and `ri` as deprecated, understands `t`, `np` and `psd`, and suggests `np=reject` for enforced policies.
+
+#### DNS health
+
+The domain page checks the live DNS records and keeps a history:
+
+- **SPF lookups:** SPF allows at most **10 DNS lookups** (counting nested `include`, `a`, `mx`, `ptr`, `exists`, `redirect`) and 2 "void" lookups that return nothing. Going over makes SPF fail with a PermError, silently, and the only sign is DMARC failures in reports. The panel shows a meter (`3 of 10`) and the include tree, warns from 8, and errors above 10. The walk is capped in depth, number of queries and time. The app never flattens SPF for you.
+- **DKIM keys:** the key type and size of each selector seen in your reports. RSA under 1024 bits is an error, 1024 bits a warning (upgrade to 2048 when you next rotate), 2048 and Ed25519 are fine. Revoked or missing selectors are flagged.
+- **Change history:** after every mailbox sync, and on every check, the app records a snapshot of your DMARC, SPF and DKIM records. Only changes are stored (the first check is the baseline), such as `DMARC: p changed from none to quarantine`, `SPF: added include:x.com`, or `DKIM key for selector s1 changed (rotated)`. It also notices when an *included* SPF record changes underneath an unchanged record (the lookup count moves). A failed DNS lookup is never recorded as a change. DNS changes after your last review appear in "Since you last reviewed".
+
+The history lives in `.data/dns-history.json`. `.data/` (see `DMARC_DATA_DIR`) holds your own data that cannot be re-created and is git-ignored; `.cache/` can be deleted freely.
 
 #### Dashboard details
 

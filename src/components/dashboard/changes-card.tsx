@@ -68,6 +68,12 @@ export function describeChanges(d: DomainChange, multi: boolean): Line[] {
       text: `${who}New sending source ${s.ip} (${num(s.messages)} messages, ${s.status}).`,
     });
   }
+  for (const c of d.dnsChanges.slice(0, 5)) {
+    lines.push({
+      tone: 'warn',
+      text: `${who}DNS changed on ${formatDateTime(c.at)}: ${c.summary}.`,
+    });
+  }
   const hidden =
     Math.max(0, d.newSources.length - 5) +
     Math.max(0, d.worsenedSources.length - 5);

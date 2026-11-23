@@ -96,6 +96,7 @@
       "!**/.react-email",
       "!**/.next",
       "!**/.cache",
+      "!**/.data",
       "!**/public",
       "!**/playwright-report",
       "!src/app/(internal)/design/_common/*.json"

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { listCached } from '@/lib/cache/report-cache';
 import { buildOverview } from '@/lib/dashboard/overview';
+import { readHistory } from '@/lib/dns/history';
 import { readState } from '@/lib/state/store';
 
 export const dynamic = 'force-dynamic';
@@ -10,6 +11,10 @@ export const dynamic = 'force-dynamic';
  * the local cache and state only (no Graph call).
  */
 export async function GET() {
-  const [entries, state] = await Promise.all([listCached(), readState()]);
-  return NextResponse.json(buildOverview(entries, state));
+  const [entries, state, history] = await Promise.all([
+    listCached(),
+    readState(),
+    readHistory(),
+  ]);
+  return NextResponse.json(buildOverview(entries, state, Date.now(), history));
 }

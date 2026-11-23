@@ -1,5 +1,5 @@
 import { type AggregateEntry, aggregate, type Counts } from './aggregate';
-import { type Changes, computeChanges } from './changes';
+import { type Changes, computeChanges, type DnsEvent } from './changes';
 import { assessReadiness, type Readiness } from './readiness';
 
 export interface OverviewDomain {
@@ -27,7 +27,16 @@ export function buildOverview(
   entries: AggregateEntry[],
   state: { lastSyncAt?: string; reviewedAt?: string },
   now: number = Date.now(),
+  /** DNS history per domain (entries with `at` and `changes`). */
+  dnsHistory: Record<
+    string,
+    Array<{ at: string; changes: Array<{ summary: string }> }>
+  > = {},
 ): Overview {
+  const dnsEvents: DnsEvent[] = Object.entries(dnsHistory).flatMap(
+    ([domain, list]) =>
+      list.map((e) => ({ domain, at: e.at, changes: e.changes })),
+  );
   const all = aggregate(entries, { domain: null, days: null }, now);
   const domains: OverviewDomain[] = all.availableDomains.map((domain) => {
     const readiness = assessReadiness(entries, domain, now);
@@ -48,7 +57,7 @@ export function buildOverview(
     now: new Date(now).toISOString(),
     sync: { lastSyncAt: state.lastSyncAt ?? null },
     review: { reviewedAt: state.reviewedAt ?? null },
-    changes: computeChanges(entries, state.reviewedAt ?? null, now),
+    changes: computeChanges(entries, state.reviewedAt ?? null, now, dnsEvents),
     reports: all.reports,
     domains,
   };

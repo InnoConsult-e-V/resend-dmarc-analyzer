@@ -1,6 +1,9 @@
 import 'server-only';
+import { createHash, createPublicKey } from 'node:crypto';
 import { Resolver } from 'node:dns/promises';
 import type { PublishedPolicy } from '@/lib/dmarc/policy';
+import { parseTags } from './record-text';
+import { analyzeSpf, type SpfAnalysis, type SpfResolver } from './spf';
 
 /**
  * DNS health check for a domain's DMARC, SPF and DKIM records. The resolver is
@@ -19,6 +22,8 @@ export interface Finding {
 }
 
 export interface DmarcCheck {
+  /** True when the DNS lookup itself failed (so `record` is unknown). */
+  lookupFailed?: boolean;
   record: string | null;
   tags: Record<string, string>;
   rua: string[];
@@ -26,13 +31,22 @@ export interface DmarcCheck {
 }
 
 export interface SpfCheck {
+  lookupFailed?: boolean;
   record: string | null;
+  /** DNS-lookup count and include tree (only when a record exists). */
+  lookups?: SpfAnalysis;
   findings: Finding[];
 }
 
 export interface DkimCheck {
   selector: string;
   present: boolean;
+  lookupFailed?: boolean;
+  keyType?: 'rsa' | 'ed25519' | 'other';
+  /** RSA modulus size in bits (256 for ed25519) */
+  bits?: number;
+  /** Short hash of the published key, to notice rotation. */
+  fingerprint?: string;
   findings: Finding[];
 }
 
@@ -63,6 +77,8 @@ export function worst(findings: Finding[]): Severity {
   );
 }
 
+export { parseTags };
+
 export function defaultResolver(): TxtResolver {
   return new Resolver({ timeout: 3000, tries: 2 });
 }
@@ -81,17 +97,6 @@ async function txt(
     const code = (err as { code?: string }).code ?? '';
     return { records: [], failed: !NO_RECORD_CODES.has(code) };
   }
-}
-
-export function parseTags(record: string): Record<string, string> {
-  const tags: Record<string, string> = {};
-  for (const part of record.split(';')) {
-    const i = part.indexOf('=');
-    if (i > 0) {
-      tags[part.slice(0, i).trim().toLowerCase()] = part.slice(i + 1).trim();
-    }
-  }
-  return tags;
 }
 
 export function ruaAddresses(rua: string | undefined): string[] {
@@ -124,7 +129,7 @@ export function judgeDmarc(
       severity: 'warn',
       message: `Could not look up _dmarc.${domain} (DNS error or timeout)`,
     });
-    return { record: null, tags: {}, rua: [], findings };
+    return { lookupFailed: true, record: null, tags: {}, rua: [], findings };
   }
   if (dmarc.length === 0) {
     findings.push({
@@ -247,7 +252,7 @@ export function judgeSpf(
       severity: 'warn',
       message: `Could not look up TXT records for ${domain} (DNS error or timeout)`,
     });
-    return { record: null, findings };
+    return { lookupFailed: true, record: null, findings };
   }
   if (spf.length === 0) {
     findings.push({ severity: 'warn', message: 'No SPF record found' });
@@ -294,6 +299,7 @@ export function judgeDkim(
     return {
       selector,
       present: false,
+      lookupFailed: true,
       findings: [
         { severity: 'warn', message: 'Lookup failed (DNS error or timeout)' },
       ],
@@ -316,10 +322,72 @@ export function judgeDkim(
       ],
     };
   }
+
+  const tags = parseTags(key);
+  const p = (tags.p ?? '').replace(/\s+/g, '');
+  const keyType = (tags.k ?? 'rsa').toLowerCase();
+  const fingerprint = createHash('sha256').update(p).digest('hex').slice(0, 16);
+  const findings: Finding[] = [];
+  let bits: number | undefined;
+  let type: DkimCheck['keyType'] = 'other';
+
+  if (keyType === 'ed25519') {
+    type = 'ed25519';
+    bits = 256;
+    findings.push({ severity: 'ok', message: 'Ed25519 key published' });
+  } else {
+    type = keyType === 'rsa' ? 'rsa' : 'other';
+    try {
+      bits = createPublicKey({
+        key: Buffer.from(p, 'base64'),
+        format: 'der',
+        type: 'spki',
+      }).asymmetricKeyDetails?.modulusLength;
+    } catch {
+      bits = undefined;
+    }
+    if (bits === undefined) {
+      findings.push({
+        severity: 'warn',
+        message: 'DKIM key is published but its public key could not be read',
+      });
+    } else if (bits < 1024) {
+      findings.push({
+        severity: 'error',
+        message: `RSA ${bits}-bit key is too weak: publish a 2048-bit key`,
+      });
+    } else if (bits === 1024) {
+      findings.push({
+        severity: 'warn',
+        message: 'RSA 1024-bit key: upgrade to 2048-bit when you can rotate',
+      });
+    } else if (bits >= 2048) {
+      findings.push({
+        severity: 'ok',
+        message: `RSA ${bits}-bit key published`,
+      });
+    } else {
+      findings.push({
+        severity: 'info',
+        message: `RSA ${bits}-bit key published`,
+      });
+    }
+  }
+  if ((tags.t ?? '').toLowerCase().split(':').includes('y')) {
+    findings.push({
+      severity: 'info',
+      message:
+        'Key is marked t=y (testing): receivers may ignore DKIM failures.',
+    });
+  }
+
   return {
     selector,
     present: true,
-    findings: [{ severity: 'ok', message: 'DKIM key published' }],
+    keyType: type,
+    bits,
+    fingerprint,
+    findings,
   };
 }
 
@@ -342,6 +410,15 @@ export async function checkDomainDns(
 
   const dmarc = judgeDmarc(domain, dmarcTxt.records, ctx, dmarcTxt.failed);
   const spf = judgeSpf(domain, spfTxt.records, spfTxt.failed);
+  if (spf.record) {
+    const lookups = await analyzeSpf(
+      domain,
+      spf.record,
+      resolver as SpfResolver,
+    );
+    spf.lookups = lookups;
+    spf.findings.push(...lookups.findings);
+  }
   const dkim = dkimTxt.map(({ selector, res }) =>
     judgeDkim(selector, res.records, res.failed),
   );

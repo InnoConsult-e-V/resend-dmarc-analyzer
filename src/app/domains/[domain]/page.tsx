@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { AppHeader } from '@/components/app-header';
+import { DnsHistory } from '@/components/dashboard/dns-history';
 import { DnsPanel, type DnsResult } from '@/components/dashboard/dns-panel';
 import { Filters, type Range } from '@/components/dashboard/filters';
 import { passRate } from '@/components/dashboard/outcomes';
@@ -215,6 +216,8 @@ export default function DomainPage() {
                   </p>
                 )}
               </section>
+
+              {dns && <DnsHistory history={dns.history ?? []} />}
 
               {data.sources.length > 0 && (
                 <SourcesTable sources={data.sources} />

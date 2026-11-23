@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server';
-import { cacheKey, getCached, setCached } from '@/lib/cache/report-cache';
+import {
+  cacheKey,
+  getCached,
+  listCached,
+  setCached,
+} from '@/lib/cache/report-cache';
 import { processAttachments } from '@/lib/dmarc/attachments';
 import { parseAndAnalyze } from '@/lib/dmarc/parser';
+import { snapshotAllDomains } from '@/lib/dns/check';
 import { GraphError, NotSignedInError } from '@/lib/graph/client';
 import { listMailboxReports } from '@/lib/graph/fetch-reports';
 import { updateState } from '@/lib/state/store';
@@ -75,6 +81,10 @@ export async function POST(request: Request) {
         }
       }
     }
+
+    // Record the DNS state of every domain so changes between visits show up.
+    // Time-boxed and failure-proof: it can never fail or stall the sync.
+    await snapshotAllDomains(await listCached());
 
     // Remember when the mailbox was last synced (shown on the dashboard).
     try {
