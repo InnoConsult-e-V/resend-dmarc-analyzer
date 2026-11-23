@@ -53,7 +53,7 @@ src/
 pnpm install
 ```
 
-2. Copy the environment template and fill in your credentials:
+2. Copy the environment template and fill it in (see [Microsoft Entra / Exchange Online setup](#microsoft-entra--exchange-online-setup)):
 
 ```bash
 cp .env.example .env.local
@@ -91,16 +91,74 @@ Secrets are read only from environment variables (never hard-coded). Put them in
 | `DMARC_CACHE_DIR` | Optional cache folder (default `.cache/dmarc`) |
 | `DMARC_CACHE_TTL_HOURS` | Optional cache lifetime (default `168`) |
 
-## Exchange Online setup (browser only)
+## Microsoft Entra / Exchange Online setup
 
-The app signs in with **delegated** permissions, so it can only read mailboxes the signed-in person can open. There is no client secret and no PowerShell.
+The app signs in with **delegated** permissions (authorization code + PKCE). It can only read mailboxes that the signed-in person can open, and there is **no client secret** to create or store. Everything below is done in the browser; no PowerShell is needed.
 
-1. **Entra admin center** → *App registrations → New registration*. Single tenant. Under *Authentication → Add a platform → Mobile and desktop applications*, add the redirect URI `http://localhost:3000/api/auth/callback`. Copy the tenant ID and client ID.
-2. *API permissions → Add → Microsoft Graph → Delegated permissions*: `Mail.Read`, `Mail.Read.Shared` (and `offline_access`, `openid`, `profile`). If your tenant blocks user consent, click **Grant admin consent**.
-3. **Exchange admin center** → *Recipients → Mailboxes* → the shared mailbox → *Delegation* → give the person who will sign in **Read and manage** access. That grant is what limits the app to this mailbox.
-4. Put `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `DMARC_MAILBOX` in `.env.local`, run `pnpm dev` (port 3000), open <http://localhost:3000>, click **Sign in with Microsoft**, then **Fetch from mailbox**. Attachments in `.xml.gz` (also `.xml`, `.gz`, `.zip`) are decompressed and parsed.
+**You need:** permission to register apps in Microsoft Entra, access to the Exchange admin center (or an admin who can do step 3), and a person (the "signing-in user") who will be granted access to the DMARC mailbox.
 
-The sign-in refresh token is stored in plain text in `.cache/auth/token.json` (`0600`, git-ignored). **Sign out** in the UI deletes it, and you can revoke access in Entra. Tokens expire eventually (or if your tenant's sign-in policies require it), and the UI then asks you to sign in again.
+### 1. Register the app
+
+1. Go to [entra.microsoft.com](https://entra.microsoft.com) → *Identity → Applications → App registrations → New registration*.
+2. Name it (e.g. "DMARC Analyzer") and choose **Accounts in this organizational directory only**.
+3. Under *Redirect URI*, select the platform **Public client/native (mobile & desktop)** and enter `http://localhost:3000/api/auth/callback`. (If the form doesn't offer it, add it afterwards under *Authentication → Add a platform → Mobile and desktop applications*.)
+4. Click **Register**, then copy two values from the Overview page: the **Directory (tenant) ID** and the **Application (client) ID**.
+
+You do **not** need *Certificates & secrets*.
+
+### 2. Add API permissions
+
+1. Open *API permissions → Add a permission → Microsoft Graph → Delegated permissions*.
+2. Select `Mail.Read` and `Mail.Read.Shared`.
+3. Under *OpenID permissions*, select `openid`, `profile` and `offline_access` (`User.Read` is already present).
+4. Click **Add permissions**.
+5. If your tenant doesn't let users consent for themselves, click **Grant admin consent for <tenant>** (or ask an admin). You will see a "Need admin approval" screen at sign-in if this is required.
+
+### 3. Give the signing-in user access to the mailbox
+
+This grant is what limits the app to the DMARC mailbox.
+
+1. Go to the [Exchange admin center](https://admin.exchange.microsoft.com) → *Recipients → Mailboxes* and select the DMARC (shared) mailbox.
+2. Open **Delegation** ("Manage mailbox delegation").
+3. Under **Read and manage (full access)**, click *Edit* and add the person who will sign in to the app.
+4. Allow up to about an hour for the change to take effect.
+
+### 4. Find the mailbox identifier
+
+`DMARC_MAILBOX` is passed to Graph as `/users/{id}`, so use the mailbox's **user principal name (UPN)** or its **object ID**. A shared mailbox's UPN is often different from its email address (for example `name@yourtenant.onmicrosoft.com`).
+
+1. In the Entra admin center go to *Identity → Users → All users* and find the shared mailbox (it appears as a user with sign-in blocked).
+2. Copy its **User principal name** or **Object ID**.
+
+### 5. Configure and run
+
+1. Put the values in `.env.local` (git-ignored):
+
+   ```
+   AZURE_TENANT_ID=<directory (tenant) id>
+   AZURE_CLIENT_ID=<application (client) id>
+   DMARC_MAILBOX=<mailbox UPN or object id>
+   ```
+
+2. Run `pnpm dev` (the app must run on port 3000 to match the redirect URI) and open <http://localhost:3000>.
+3. Click **Sign in with Microsoft** and sign in as the person you delegated in step 3.
+4. Click **Fetch from mailbox**. Attachments in `.xml.gz` (also `.xml`, `.gz`, `.zip`) are decompressed and parsed.
+
+The sign-in refresh token is stored in plain text in `.cache/auth/token.json` (`0600`, git-ignored). **Sign out** in the UI deletes it, and access can be revoked in Entra. Tokens eventually expire (or earlier if your tenant's sign-in policies require it), and the UI then asks you to sign in again.
+
+### Troubleshooting
+
+| Symptom | Likely cause and fix |
+|---|---|
+| `AADSTS50011` (redirect URI mismatch) | The redirect URI in Entra must exactly match `http://localhost:3000/api/auth/callback` and use the *Mobile and desktop applications* platform. The app must run on port 3000 (or set `AUTH_REDIRECT_URI` to match). |
+| "Need admin approval" / `AADSTS65001` | Click **Grant admin consent** in *API permissions*, or ask an admin. |
+| `AADSTS7000218` (client secret required) | In *Authentication*, set **Allow public client flows** to **Yes**. |
+| Fetch fails with `HTTP 404, ErrorInvalidUser` | Graph can't resolve `DMARC_MAILBOX`. Check for typos and use the UPN or object ID (step 4). The mailbox must be in this tenant and in Exchange Online. |
+| Fetch fails with `HTTP 404, ErrorItemNotFound` | The folder doesn't exist. Remove `DMARC_MAILBOX_FOLDER` (default is `inbox`) or fix its name. |
+| Fetch fails with `HTTP 403` | The signing-in user doesn't have *Read and manage* on the mailbox yet (step 3), it hasn't propagated, or you signed in as a different account. |
+| "Sign in required" after working earlier | The sign-in expired or was revoked. Click **Sign in with Microsoft** again. |
+| `Missing configuration: …` | A variable is missing from `.env.local`. Restart `pnpm dev` after editing it. |
+| 0 reports found | Attachment names must end in `.xml`, `.gz` or `.zip`, and only the 50 most recent messages with attachments are checked. |
 
 ### Caching
 
