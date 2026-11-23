@@ -73,3 +73,8 @@ export function getCacheConfig(): CacheConfig {
     maxEntries: 500,
   };
 }
+
+/** How far back a mailbox fetch looks (days). Matches the cache retention. */
+export function getFetchDays(): number {
+  return positiveNumber('DMARC_FETCH_DAYS', 90);
+}

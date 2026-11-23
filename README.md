@@ -87,6 +87,7 @@ Secrets are read only from environment variables (never hard-coded). Put them in
 | `DMARC_MAILBOX` | The (shared) mailbox that receives the reports |
 | `AUTH_REDIRECT_URI` | Optional, default `http://localhost:3000/api/auth/callback` |
 | `DMARC_AUTH_DIR` | Optional folder for the sign-in token (default `.cache/auth`) |
+| `DMARC_FETCH_DAYS` | Optional, how many days back a fetch looks (default `90`) |
 | `DMARC_MAILBOX_FOLDER` | Optional folder (default `inbox`) |
 | `DMARC_CACHE_DIR` | Optional cache folder (default `.cache/dmarc`) |
 | `DMARC_CACHE_TTL_HOURS` | Optional cache lifetime (default `168`) |
@@ -158,7 +159,7 @@ The sign-in refresh token is stored in plain text in `.cache/auth/token.json` (`
 | Fetch fails with `HTTP 403` | The signing-in user doesn't have *Read and manage* on the mailbox yet (step 3), it hasn't propagated, or you signed in as a different account. |
 | "Sign in required" after working earlier | The sign-in expired or was revoked. Click **Sign in with Microsoft** again. |
 | `Missing configuration: …` | A variable is missing from `.env.local`. Restart `pnpm dev` after editing it. |
-| 0 reports found | Attachment names must end in `.xml`, `.gz` or `.zip`, and only the 50 most recent messages with attachments are checked. |
+| 0 reports found | Attachment names must end in `.xml`, `.gz` or `.zip`, and only messages from the last 90 days (`DMARC_FETCH_DAYS`) are checked. |
 
 ### Caching
 
