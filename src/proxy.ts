@@ -78,7 +78,13 @@ export function proxy(request: NextRequest) {
     return forbidden();
   }
 
-  if (request.nextUrl.pathname.startsWith('/api/')) {
+  // The OAuth redirect back from login.microsoftonline.com is a cross-site
+  // top-level navigation. It is protected by the state + PKCE cookie instead.
+  const isAuthCallback =
+    request.method === 'GET' &&
+    request.nextUrl.pathname === '/api/auth/callback';
+
+  if (request.nextUrl.pathname.startsWith('/api/') && !isAuthCallback) {
     const origin = request.headers.get('origin');
     if (origin && !isLoopbackOrigin(origin)) {
       return forbidden();

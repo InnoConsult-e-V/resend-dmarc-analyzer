@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { cacheKey, getCached, setCached } from '@/lib/cache/report-cache';
 import { processAttachments } from '@/lib/dmarc/attachments';
 import { parseAndAnalyze } from '@/lib/dmarc/parser';
-import { GraphError } from '@/lib/graph/client';
+import { GraphError, NotSignedInError } from '@/lib/graph/client';
 import { listMailboxReports } from '@/lib/graph/fetch-reports';
 import type { DMARCAnalysis } from '@/types/dmarc';
 
@@ -84,6 +84,12 @@ export async function POST(request: Request) {
       errors,
     });
   } catch (err) {
+    if (err instanceof NotSignedInError) {
+      return NextResponse.json(
+        { error: 'Sign in required', signInRequired: true },
+        { status: 401 },
+      );
+    }
     const message =
       err instanceof GraphError
         ? err.message

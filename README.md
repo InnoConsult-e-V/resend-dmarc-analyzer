@@ -84,18 +84,23 @@ Secrets are read only from environment variables (never hard-coded). Put them in
 |----------|-------------|
 | `AZURE_TENANT_ID` | Entra tenant ID |
 | `AZURE_CLIENT_ID` | App registration (client) ID |
-| `AZURE_CLIENT_SECRET` | App client secret (use a short expiry; rotate regularly) |
-| `DMARC_MAILBOX` | Mailbox that receives the reports |
+| `DMARC_MAILBOX` | The (shared) mailbox that receives the reports |
+| `AUTH_REDIRECT_URI` | Optional, default `http://localhost:3000/api/auth/callback` |
+| `DMARC_AUTH_DIR` | Optional folder for the sign-in token (default `.cache/auth`) |
 | `DMARC_MAILBOX_FOLDER` | Optional folder (default `inbox`) |
 | `DMARC_CACHE_DIR` | Optional cache folder (default `.cache/dmarc`) |
 | `DMARC_CACHE_TTL_HOURS` | Optional cache lifetime (default `168`) |
 
-## Exchange Online setup
+## Exchange Online setup (browser only)
 
-1. In Entra ID, register an application and create a client secret.
-2. Add the Microsoft Graph **application** permission `Mail.Read` and grant admin consent.
-3. Restrict the app to the DMARC mailbox only with an [Application Access Policy](https://learn.microsoft.com/graph/auth-limit-mailbox-access) (`New-ApplicationAccessPolicy`).
-4. Set the environment variables above, run `pnpm dev`, and click **Fetch from mailbox**. Attachments in `.xml.gz` (also `.xml`, `.gz`, `.zip`) are decompressed and parsed.
+The app signs in with **delegated** permissions, so it can only read mailboxes the signed-in person can open. There is no client secret and no PowerShell.
+
+1. **Entra admin center** → *App registrations → New registration*. Single tenant. Under *Authentication → Add a platform → Mobile and desktop applications*, add the redirect URI `http://localhost:3000/api/auth/callback`. Copy the tenant ID and client ID.
+2. *API permissions → Add → Microsoft Graph → Delegated permissions*: `Mail.Read`, `Mail.Read.Shared` (and `offline_access`, `openid`, `profile`). If your tenant blocks user consent, click **Grant admin consent**.
+3. **Exchange admin center** → *Recipients → Mailboxes* → the shared mailbox → *Delegation* → give the person who will sign in **Read and manage** access. That grant is what limits the app to this mailbox.
+4. Put `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `DMARC_MAILBOX` in `.env.local`, run `pnpm dev` (port 3000), open <http://localhost:3000>, click **Sign in with Microsoft**, then **Fetch from mailbox**. Attachments in `.xml.gz` (also `.xml`, `.gz`, `.zip`) are decompressed and parsed.
+
+The sign-in refresh token is stored in plain text in `.cache/auth/token.json` (`0600`, git-ignored). **Sign out** in the UI deletes it, and you can revoke access in Entra. Tokens expire eventually (or if your tenant's sign-in policies require it), and the UI then asks you to sign in again.
 
 ### Caching
 

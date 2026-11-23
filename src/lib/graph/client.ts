@@ -1,9 +1,10 @@
 import 'server-only';
-import { getGraphConfig } from '@/lib/config';
+import { AuthError, refreshAccessToken } from './auth';
+import { clearAuth, readAuth, writeAuth } from './token-store';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
-// Token is cached in memory only; never written to disk or logged.
+// Access token is cached in memory only; never written to disk or logged.
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
 /**
@@ -11,40 +12,53 @@ let cachedToken: { value: string; expiresAt: number } | null = null;
  */
 export class GraphError extends Error {}
 
+/** No usable sign-in: the user has to sign in (again). */
+export class NotSignedInError extends GraphError {
+  constructor() {
+    super('Sign in required');
+  }
+}
+
+export function resetAccessToken(): void {
+  cachedToken = null;
+}
+
 async function getAccessToken(): Promise<string> {
   if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
     return cachedToken.value;
   }
 
-  const { tenantId, clientId, clientSecret } = getGraphConfig();
-  const res = await fetch(
-    `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        scope: 'https://graph.microsoft.com/.default',
-        grant_type: 'client_credentials',
-      }),
-    },
-  );
+  const stored = await readAuth();
+  if (!stored) {
+    throw new NotSignedInError();
+  }
 
-  if (!res.ok) {
-    // Do not include the response body: it can echo identifiers.
+  let result: Awaited<ReturnType<typeof refreshAccessToken>>;
+  try {
+    result = await refreshAccessToken(stored.refreshToken);
+  } catch (err) {
+    if (err instanceof AuthError && err.invalidGrant) {
+      // Refresh token expired or revoked: require a fresh sign-in.
+      await clearAuth();
+      cachedToken = null;
+      throw new NotSignedInError();
+    }
     throw new GraphError(
-      `Microsoft authentication failed (HTTP ${res.status})`,
+      err instanceof AuthError ? err.message : 'Microsoft sign-in failed',
     );
   }
 
-  const json = (await res.json()) as {
-    access_token: string;
-    expires_in: number;
-  };
+  // Refresh tokens rotate: keep the new one.
+  if (result.refreshToken) {
+    await writeAuth({
+      refreshToken: result.refreshToken,
+      account: result.account ?? stored.account,
+      savedAt: Date.now(),
+    });
+  }
   cachedToken = {
-    value: json.access_token,
-    expiresAt: Date.now() + json.expires_in * 1000,
+    value: result.accessToken,
+    expiresAt: Date.now() + result.expiresIn * 1000,
   };
   return cachedToken.value;
 }
@@ -69,7 +83,26 @@ export async function graphFetch(
   });
 
   if (!res.ok) {
-    throw new GraphError(`Microsoft Graph request failed (HTTP ${res.status})`);
+    // Surface only Graph's short error code (e.g. ErrorInvalidUser) and which
+    // step failed. Never the message or body, which can echo identifiers.
+    let code = '';
+    try {
+      const c = ((await res.json()) as { error?: { code?: string } }).error
+        ?.code;
+      if (c && /^[A-Za-z0-9_]{1,64}$/.test(c)) {
+        code = c;
+      }
+    } catch {
+      // no usable body
+    }
+    const step = path.includes('/attachments')
+      ? 'reading attachments'
+      : path.includes('/mailFolders/')
+        ? 'listing the mailbox folder'
+        : 'calling Graph';
+    throw new GraphError(
+      `Microsoft Graph request failed while ${step} (HTTP ${res.status}${code ? `, ${code}` : ''})`,
+    );
   }
   return res;
 }

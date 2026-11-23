@@ -11,15 +11,15 @@ import 'server-only';
 export interface GraphConfig {
   tenantId: string;
   clientId: string;
-  clientSecret: string;
   mailbox: string;
   folder: string;
+  redirectUri: string;
+  authDir: string;
 }
 
 const REQUIRED_GRAPH_VARS = [
   'AZURE_TENANT_ID',
   'AZURE_CLIENT_ID',
-  'AZURE_CLIENT_SECRET',
   'DMARC_MAILBOX',
 ] as const;
 
@@ -36,9 +36,12 @@ export function getGraphConfig(): GraphConfig {
   return {
     tenantId: process.env.AZURE_TENANT_ID as string,
     clientId: process.env.AZURE_CLIENT_ID as string,
-    clientSecret: process.env.AZURE_CLIENT_SECRET as string,
     mailbox: process.env.DMARC_MAILBOX as string,
     folder: process.env.DMARC_MAILBOX_FOLDER || 'inbox',
+    redirectUri:
+      process.env.AUTH_REDIRECT_URI ||
+      'http://localhost:3000/api/auth/callback',
+    authDir: process.env.DMARC_AUTH_DIR || '.cache/auth',
   };
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ReportViewer } from '@/components/dmarc';
 import { parseAndAnalyze } from '@/lib/dmarc/parser';
 import { reviveAnalysis } from '@/lib/dmarc/revive';
@@ -20,6 +20,47 @@ export default function Home() {
   const [isFetching, setIsFetching] = useState(false);
   const [fetched, setFetched] = useState<FetchedReport[]>([]);
   const [fetchNote, setFetchNote] = useState<string | null>(null);
+  const [auth, setAuth] = useState<{
+    checked: boolean;
+    signedIn: boolean;
+    account: string | null;
+  }>({ checked: false, signedIn: false, account: null });
+
+  const loadAuth = useCallback(async () => {
+    try {
+      const res = await fetch('/api/auth/status');
+      const data = await res.json();
+      setAuth({
+        checked: true,
+        signedIn: data.signedIn,
+        account: data.account,
+      });
+    } catch {
+      setAuth({ checked: true, signedIn: false, account: null });
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAuth();
+    const code = new URLSearchParams(window.location.search).get('auth_error');
+    if (code) {
+      const messages: Record<string, string> = {
+        denied: 'Sign-in was cancelled or denied.',
+        state: 'Sign-in could not be verified. Please try again.',
+        exchange: 'Sign-in failed. Please try again.',
+        config: 'Sign-in is not configured (check your environment variables).',
+      };
+      setError(messages[code] ?? 'Sign-in failed.');
+      window.history.replaceState({}, '', '/');
+    }
+  }, [loadAuth]);
+
+  const handleSignOut = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    setFetched([]);
+    setFetchNote(null);
+    loadAuth();
+  };
 
   const handleAnalyze = () => {
     if (!xml.trim()) {
@@ -53,6 +94,10 @@ export default function Home() {
         { method: 'POST' },
       );
       const data = await res.json();
+      if (res.status === 401 && data.signInRequired) {
+        setAuth({ checked: true, signedIn: false, account: null });
+        throw new Error('Please sign in to read the mailbox.');
+      }
       if (!res.ok) {
         throw new Error(data.error ?? 'Failed to fetch reports');
       }
@@ -109,6 +154,42 @@ export default function Home() {
         </div>
       </header>
 
+      {/* Status messages */}
+      {(error || fetchNote) && (
+        <div
+          className="max-w-6xl mx-auto px-4 pt-4 space-y-2"
+          aria-live="polite"
+        >
+          {error && (
+            <div
+              role="alert"
+              className="flex items-start justify-between gap-4 bg-red-dim border border-red/30 rounded-lg px-4 py-3 text-sm text-red"
+            >
+              <span>{error}</span>
+              <button
+                onClick={() => setError(null)}
+                className="shrink-0 opacity-70 hover:opacity-100"
+                aria-label="Dismiss error"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+          {fetchNote && (
+            <div className="flex items-start justify-between gap-4 bg-gray-2 border border-gray-3 rounded-lg px-4 py-3 text-sm text-gray-8">
+              <span>{fetchNote}</span>
+              <button
+                onClick={() => setFetchNote(null)}
+                className="shrink-0 text-gray-6 hover:text-gray-9"
+                aria-label="Dismiss message"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <main className="max-w-6xl mx-auto px-4 py-8">
         {!analysis ? (
           <div className="space-y-6">
@@ -128,23 +209,40 @@ export default function Home() {
               <h3 className="text-lg font-medium text-gray-10">
                 Exchange mailbox
               </h3>
-              <div className="flex flex-col md:flex-row gap-3">
-                <button
-                  onClick={() => handleFetch()}
-                  disabled={isFetching}
-                  className="bg-gray-10 text-gray-1 font-medium py-3 px-6 rounded-xl hover:bg-gray-9 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              {!auth.checked ? null : auth.signedIn ? (
+                <div className="flex flex-col md:flex-row md:items-center gap-3">
+                  <button
+                    onClick={() => handleFetch()}
+                    disabled={isFetching}
+                    className="bg-gray-10 text-gray-1 font-medium py-3 px-6 rounded-xl hover:bg-gray-9 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isFetching ? 'Fetching...' : 'Fetch from mailbox'}
+                  </button>
+                  <button
+                    onClick={() => handleFetch(true)}
+                    disabled={isFetching}
+                    className="border border-gray-3 text-gray-9 font-medium py-3 px-6 rounded-xl hover:bg-gray-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Force refresh
+                  </button>
+                  <span className="text-sm text-gray-6 md:ml-auto">
+                    Signed in as {auth.account}{' '}
+                    <button
+                      onClick={handleSignOut}
+                      className="underline underline-offset-2 hover:text-gray-9"
+                    >
+                      Sign out
+                    </button>
+                  </span>
+                </div>
+              ) : (
+                <a
+                  href="/api/auth/login"
+                  className="inline-block bg-gray-10 text-gray-1 font-medium py-3 px-6 rounded-xl hover:bg-gray-9 transition-colors"
                 >
-                  {isFetching ? 'Fetching...' : 'Fetch from mailbox'}
-                </button>
-                <button
-                  onClick={() => handleFetch(true)}
-                  disabled={isFetching}
-                  className="border border-gray-3 text-gray-9 font-medium py-3 px-6 rounded-xl hover:bg-gray-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  Force refresh
-                </button>
-              </div>
-              {fetchNote && <p className="text-sm text-gray-7">{fetchNote}</p>}
+                  Sign in with Microsoft
+                </a>
+              )}
               {fetched.length > 0 && (
                 <ul className="divide-y divide-gray-3 border border-gray-3 rounded-xl">
                   {fetched.map((r, i) => (
@@ -199,12 +297,6 @@ export default function Home() {
                   </button>
                 )}
               </div>
-
-              {error && (
-                <div className="bg-red-dim border border-red/30 rounded-lg px-4 py-3 text-sm text-red">
-                  {error}
-                </div>
-              )}
 
               <button
                 onClick={handleAnalyze}
