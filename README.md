@@ -15,34 +15,41 @@ A Next.js application to analyze DMARC aggregate reports (RUA) and forensic repo
 ```
 src/
 ├── app/
+│   ├── page.tsx                      # Dashboard (home): sync, changes, domains, trends
+│   ├── domains/[domain]/page.tsx     # Domain page: readiness, trends, DNS, sources
+│   ├── reports/page.tsx              # Report viewer and paste-XML analyzer
 │   ├── api/
-│   │   ├── analyze/route.ts          # POST endpoint for frontend parsing
-│   │   └── webhooks/dmarc/
-│   │       ├── rua/route.ts          # Aggregate report webhook
-│   │       └── ruf/route.ts          # Forensic report webhook (pass-through)
-│   ├── page.tsx                      # Paste-and-analyze frontend
-│   ├── layout.tsx                    # App layout
-│   └── globals.css                   # Resend-style dark theme
-├── components/dmarc/
-│   ├── summary-card.tsx              # Stats card component
-│   ├── status-badge.tsx              # Pass/fail badges
-│   ├── records-table.tsx             # Records table with auth results
-│   └── report-viewer.tsx             # Main report display component
-├── emails/
-│   └── dmarc-report.tsx              # React Email template
+│   │   ├── overview/                 # Last sync/review, changes, per-domain readiness
+│   │   ├── review/                   # "Mark as reviewed"
+│   │   ├── dashboard/                # Aggregates; enrich (reverse DNS); dns (record check)
+│   │   ├── reports/                  # fetch (mailbox sync), cached
+│   │   ├── auth/                     # Microsoft sign-in (login, callback, status, logout)
+│   │   ├── health/                   # Status pill check
+│   │   └── analyze/                  # Parse pasted XML
+│   └── layout.tsx, globals.css       # Layout and dark theme
+├── components/
+│   ├── dashboard/                    # Cards, chart, tables, readiness and DNS panels
+│   ├── dmarc/                        # Per-report viewer components
+│   ├── app-header.tsx, mailbox-controls.tsx, status-banner.tsx, status-pill.tsx
+├── hooks/                            # use-health, use-mailbox
 ├── lib/
-│   ├── config.ts                     # Environment config
-│   ├── dmarc/
-│   │   ├── parser.ts                 # XML parser & analysis
-│   │   ├── attachments.ts            # .xml, .gz, .zip extraction
-│   │   └── sample.ts                 # Sample XML for testing
-│   ├── email/
-│   │   └── send-report.ts            # Email sender (disabled)
-│   └── webhook/
-│       └── verify.ts                 # Svix signature verification
-├── types/
-│   └── dmarc.ts                      # TypeScript types
-└── .env.example                      # Environment variables template
+│   ├── config.ts                     # Environment configuration
+│   ├── graph/                        # Microsoft Graph: auth, token store, mailbox listing
+│   ├── cache/report-cache.ts         # On-disk cache of parsed reports
+│   ├── state/store.ts                # Last sync / last review times
+│   ├── dashboard/                    # aggregate, readiness, changes, overview, planner (pure logic)
+│   ├── dns/                          # records (DMARC/SPF/DKIM check), spf (lookup counter), history, reverse (PTR)
+│   ├── data/store.ts                 # JSON store for your own data (.data/)
+│   ├── senders/                      # name map lookup, keys, decisions (approved / not mine)
+│   ├── dmarc/                        # parser, attachments, identity matching
+│   ├── format-date.ts                # DD.MM.YYYY formatting
+│   └── email/send-report.ts          # Email sender (disabled)
+├── emails/dmarc-report.tsx           # React Email digest template (preview only)
+├── proxy.ts                          # Local-only guard (rejects non-local requests)
+data/sender-names/                    # Vendored sender-name map (CC BY-SA 4.0) + NOTICE
+scripts/update-sender-names.ts        # `pnpm update:senders`
+└── types/dmarc.ts                    # TypeScript types
+.env.example                          # Environment variables template
 ```
 
 ## Getting Started
@@ -87,9 +94,15 @@ Secrets are read only from environment variables (never hard-coded). Put them in
 | `DMARC_MAILBOX` | The (shared) mailbox that receives the reports |
 | `AUTH_REDIRECT_URI` | Optional, default `http://localhost:3000/api/auth/callback` |
 | `DMARC_AUTH_DIR` | Optional folder for the sign-in token (default `.cache/auth`) |
+| `DMARC_FETCH_DAYS` | Optional, how many days back a fetch looks (default `90`) |
 | `DMARC_MAILBOX_FOLDER` | Optional folder (default `inbox`) |
 | `DMARC_CACHE_DIR` | Optional cache folder (default `.cache/dmarc`) |
-| `DMARC_CACHE_TTL_HOURS` | Optional cache lifetime (default `168`) |
+| `DMARC_CACHE_TTL_HOURS` | Optional cache lifetime (default `2160`, i.e. 90 days) |
+| `DMARC_CACHE_MAX_ENTRIES` | Optional cache size cap (default `5000`) |
+| `DMARC_REPORT_ADDRESS` | Optional address that receives the reports; the DNS check verifies `rua=` includes it |
+| `DMARC_DATA_DIR` | Optional folder for your own data: DNS history and approved/not-mine senders (default `.data`, git-ignored) |
+| `DMARC_STATE_DIR` | Optional folder for the last-sync and last-review times (default `.cache/state`) |
+| `DMARC_DNS_CACHE_DIR` | Optional folder for cached reverse-DNS lookups (default `.cache/dns`) |
 
 ## Microsoft Entra / Exchange Online setup
 
@@ -158,11 +171,88 @@ The sign-in refresh token is stored in plain text in `.cache/auth/token.json` (`
 | Fetch fails with `HTTP 403` | The signing-in user doesn't have *Read and manage* on the mailbox yet (step 3), it hasn't propagated, or you signed in as a different account. |
 | "Sign in required" after working earlier | The sign-in expired or was revoked. Click **Sign in with Microsoft** again. |
 | `Missing configuration: …` | A variable is missing from `.env.local`. Restart `pnpm dev` after editing it. |
-| 0 reports found | Attachment names must end in `.xml`, `.gz` or `.zip`, and only the 50 most recent messages with attachments are checked. |
+| 0 reports found | Attachment names must end in `.xml`, `.gz` or `.zip`, and only messages from the last 90 days (`DMARC_FETCH_DAYS`) are checked. |
+
+### Using the app
+
+The **dashboard** (the home page) is built for an occasional check-in by one admin:
+
+1. **Sync mailbox** at the top downloads new reports (manual; the app never syncs on its own). It shows when the data was last synced and warns if that is more than 7 days ago.
+2. **Since you last reviewed** lists what is new since you last pressed **Mark as reviewed**: new reports, a change in the pass rate, new or newly failing sending sources, and policy changes. New means *received* after the review, so late-delivered reports about older days count too. Pressing the button sets the new baseline (stored locally, see `DMARC_STATE_DIR`; deleting `.cache` resets it).
+3. **Domains** shows one card per domain with its published policy, a **readiness** status, the single recommended next step and the key numbers. Click a card for the **domain page**: the full readiness checklist, trend chart, live DNS check and every sending source.
+4. **Reports** (in the header) is the report-by-report viewer and the paste-XML analyzer.
+
+#### Policy readiness
+
+Each domain is assessed over the last 30 days. If that holds fewer than 100 messages (a small domain), the window widens to 60 and then 90 days; the window used is shown. The status answers "can I move to a stricter policy?":
+
+| Status | Meaning |
+|---|---|
+| Not enough data | Fewer than 14 report days or 100 messages even on the widest window. Keep syncing. |
+| Not ready | A check failed (for example too many messages failing both DKIM and SPF, or a missing DMARC record). |
+| Almost ready | Only warnings are left (for example `pct` below 100, a stale sync, or the policy not yet stable). |
+| Ready to tighten | All checks pass: the next step says to move to `p=quarantine` (start with `pct=25`) or to `p=reject`. |
+| Enforced | `p=reject` with a failure rate within the limit. |
+| Enforced, needs review | `p=reject`, but more messages fail both checks than the limit: legitimate mail may be rejected. |
+
+The thresholds are constants in `src/lib/dashboard/readiness.ts`: at most **2%** of messages failing both checks to move from `none` to `quarantine`; at most **0.5%** to move to `reject` (and to stay healthy there), with `quarantine` stable for at least **14 days**. Senders failing both checks are listed for review: only you can tell whether a failing sender is yours (fix its SPF or DKIM first) or a spoofer (which enforcement blocks).
+
+The readiness metric, **survives enforcement**, counts every message that passed at least one of DKIM or SPF, because that is what DMARC requires. The stricter **passed both** figure (both aligned checks passed) is shown separately; the two are labelled so they are not confused.
+
+#### Sender names, approvals and "Needs attention"
+
+- **Names:** each sending source is labelled with the service behind it, such as "Intuit Mailchimp (Marketing)" or "Outlook (Personal and Microsoft 365)". The app looks at the DKIM signing domains, then the SPF and envelope-from domains, then the reverse-DNS name, and matches them against a vendored copy of [parsedmarc's base reverse DNS map](https://github.com/domainaware/parsedmarc/tree/master/parsedmarc/resources/maps) (about 38,000 entries, in `data/sender-names/`). Your own domain is never treated as a service. Names are best effort and shown as "identified as"; they never approve anything by themselves. The lookup is entirely local; nothing is sent anywhere.
+- **Licence:** that data file is **CC BY-SA 4.0** (attribution to the parsedmarc project and IPinfo), unlike the rest of the code. See `data/sender-names/NOTICE.md`. Refresh it occasionally with `pnpm update:senders`: it downloads one fixed file, validates it strictly, and leaves the existing files untouched if anything looks wrong.
+- **Decide once per sender:** in the sources table, **Approve** a sender that is yours or mark it **Not mine** (what enforcement should block). One decision covers every IP of a service, so a provider that sends from many servers is one decision, not many. **Clear** undoes it. A bulk button marks all failing, unreviewed sources shown as not mine. Decisions are stored in `.data/senders.json`.
+- **Effect on readiness:** senders marked *not mine* do not count against the failure-rate check. An *approved* sender that fails DKIM and SPF is an error ("fix its SPF or DKIM before enforcing"). A failing sender nobody has reviewed is a warning, so the status stays at "Almost ready" until you decide. A source needs review once it has at least 5 failed messages **and** at least 0.5% of the domain's mail (counted per service), so tiny domains are not flooded and busy ones are not drowned in noise.
+- **Needs attention** (top of the domain page, and a badge on the dashboard card): approved-but-failing senders, unreviewed failing senders, new unreviewed senders since your last review, and DNS problems, in that order of urgency.
+
+#### Policy change planner
+
+When a domain is ready to tighten its policy, the domain page shows **Next change to publish**: the exact TXT record for `_dmarc.<your domain>`, built from your *live* record, with the changed tags highlighted and a copy button. Only `p`, `pct`, `t` and `np` are ever changed; every other tag (`rua`, `ruf`, `adkim`, `aspf`, `fo`, `sp`, ...) and the tag order are kept.
+
+- **`p=none` to `p=quarantine`, and `quarantine` to `reject`:** two steps. First `p=<next>; pct=25; t=y` (partial enforcement for older receivers, test mode for DMARCbis receivers, which have no partial enforcement), then, after a clean week or two, the same record without `pct` and `t`.
+- **A legacy ramp in progress** (`pct` below 100): raise `pct` to 50, then drop it.
+- **Test mode** (`t=y`) with the checks passing: remove `t` (and `pct`) to enforce.
+- **Fully enforced:** optionally add `np=reject` for subdomains that do not exist.
+- **No DMARC record:** a monitoring-only starter record with a placeholder report address.
+- **Not ready** (not enough data, failing senders, DNS problems): no record is proposed, only the reason.
+
+After you publish a step, press **Check again**: the change appears in the DNS history, and the next reports show its effect.
+
+#### DMARCbis (the 2026 revision of DMARC)
+
+DMARC was revised in May 2026 (RFC 9989, 9990, 9991). The app reads both the original and the new aggregate report format:
+
+- `pct` is gone in the new format. When a report has no `pct` the policy is treated as applying to all failing mail, and the app never shows `NaN` or `undefined`. Optional tags (`sp`, `adkim`, `aspf`) are shown as "same as p" or "relaxed (default)" when absent.
+- `t=y` (testing) means receivers do **not** apply the policy, like the old `pct=0`. Readiness treats `p=quarantine` with `t=y` as *not enforced* and tells you to remove `t=y` once the checks pass.
+- New tags `np`, `testing`, `discovery_method`, `version` and `generator` are read and shown where useful. The DNS check explains `pct`, `rf` and `ri` as deprecated, understands `t`, `np` and `psd`, and suggests `np=reject` for enforced policies.
+
+#### DNS health
+
+The domain page checks the live DNS records and keeps a history:
+
+- **SPF lookups:** SPF allows at most **10 DNS lookups** (counting nested `include`, `a`, `mx`, `ptr`, `exists`, `redirect`) and 2 "void" lookups that return nothing. Going over makes SPF fail with a PermError, silently, and the only sign is DMARC failures in reports. The panel shows a meter (`3 of 10`) and the include tree, warns from 8, and errors above 10. The walk is capped in depth, number of queries and time. The app never flattens SPF for you.
+- **DKIM keys:** the key type and size of each selector seen in your reports. RSA under 1024 bits is an error, 1024 bits a warning (upgrade to 2048 when you next rotate), 2048 and Ed25519 are fine. Revoked or missing selectors are flagged.
+- **Change history:** after every mailbox sync, and on every check, the app records a snapshot of your DMARC, SPF and DKIM records. Only changes are stored (the first check is the baseline), such as `DMARC: p changed from none to quarantine`, `SPF: added include:x.com`, or `DKIM key for selector s1 changed (rotated)`. It also notices when an *included* SPF record changes underneath an unchanged record (the lookup count moves). A failed DNS lookup is never recorded as a change. DNS changes after your last review appear in "Since you last reviewed".
+
+The history lives in `.data/dns-history.json`. `.data/` (see `DMARC_DATA_DIR`) holds your own data that cannot be re-created and is git-ignored; `.cache/` can be deleted freely.
+
+#### Dashboard details
+
+- **Trends range:** date range (7/30/90 days or all time, relative to now) for the chart and totals.
+- **Metrics:** each message is counted as *passed both* (aligned DKIM and SPF passed), *passed one*, or *failed both*. The headline rate is *passed both / messages*, the same definition as the per-report card. Counts are weighted by each record's message count. Repeated reports are de-duplicated by reporter and report ID. Days are UTC days of the report's start time.
+- **Daily chart:** stacked columns of the three outcomes, with a table view and keyboard support (arrow keys read each day).
+- **Sending sources:** each source IP is shown with its reverse-DNS name, confirmed by a forward lookup. Sources are marked *Healthy* (at least 95% passed both), *Failing* (at least 50% failed both), otherwise *Mixed*. A failing source with at least 10 messages and no confirmed reverse DNS is flagged *Suspicious*.
+- **DNS check** (per domain, on demand): looks up the live DMARC, SPF and DKIM records (for the selectors seen in your reports) and reports problems such as a missing record, `p=none`, `pct<100`, no `rua=`, multiple SPF records, a permissive `all`, or revoked DKIM keys. If `DMARC_REPORT_ADDRESS` is set, it also checks that `rua=` includes it.
+
+**What a report tells you about senders:** an aggregate (RUA) report identifies the *reporter* (organisation, contact address, report ID) and, per group of messages, the *sending server* (source IP), the visible *From domain*, the *DKIM signing domain and selector*, the *SPF domain* (and whether SPF checked the MAIL FROM or HELO name) and, if the reporter includes it, the *envelope-from* domain. It never contains individual sender addresses, subjects, message IDs or content; that only appears in forensic (RUF) reports, which this app does not read. The dashboard's **Sends as** column and the per-report **Authenticated as** column show these identities and mark (with ↗) any domain that is not one of the reported domains, which usually means a third-party sender (for example a mailing service signing with its own domain) and occasionally spoofing. Envelope-from and SPF scope are captured from now on; reports cached before that need one **Force refresh** to include them.
+
+Privacy: reverse and DNS lookups go only to your machine's own DNS resolver. No third-party IP, geo or reputation services are used. Only domains and IPs that appear in your cached reports can be looked up. Lookup results are cached in `.cache/dns`.
 
 ### Caching
 
-Parsed reports are cached on disk (one JSON file per attachment, under `.cache/dmarc`, git-ignored), so repeat fetches only download and parse new messages. **Force refresh** in the UI bypasses the cache. The cache holds report data (domains, source IPs) in plain text with `0600` file permissions. Delete the folder to clear it.
+Parsed reports are cached on disk (one JSON file per attachment, under `.cache/dmarc`, git-ignored), so repeat fetches only download and parse new messages. **Force refresh** in the UI bypasses the cache. Entries are kept for 90 days by default so the dashboard can show trends, which means report data stays on disk in plain text for that long; lower `DMARC_CACHE_TTL_HOURS` if that is too long. The cache holds report data (domains, source IPs) in plain text with `0600` file permissions. Delete the folder to clear it.
 
 Email digest sending is currently disabled. The template in `src/emails/dmarc-report.tsx` is kept so a transport can be added later.
 

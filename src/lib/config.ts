@@ -69,7 +69,39 @@ function positiveNumber(name: string, fallback: number): number {
 export function getCacheConfig(): CacheConfig {
   return {
     dir: process.env.DMARC_CACHE_DIR || '.cache/dmarc',
-    ttlMs: positiveNumber('DMARC_CACHE_TTL_HOURS', 168) * 60 * 60 * 1000,
-    maxEntries: 500,
+    // 90 days by default: the dashboard needs history to show trends.
+    ttlMs: positiveNumber('DMARC_CACHE_TTL_HOURS', 2160) * 60 * 60 * 1000,
+    maxEntries: Math.floor(positiveNumber('DMARC_CACHE_MAX_ENTRIES', 5000)),
   };
+}
+
+/** How far back a mailbox fetch looks (days). Matches the cache retention. */
+export function getFetchDays(): number {
+  return positiveNumber('DMARC_FETCH_DAYS', 90);
+}
+
+/**
+ * Folder for data that is the admin's own and cannot be re-created (approved
+ * senders, DNS history). Unlike `.cache`, it should not be deleted casually.
+ */
+export function getDataDir(): string {
+  return process.env.DMARC_DATA_DIR || '.data';
+}
+
+/** Folder for the small local state file (last sync / last review). */
+export function getStateDir(): string {
+  return process.env.DMARC_STATE_DIR || '.cache/state';
+}
+
+/** Folder for the cached reverse-DNS (PTR) lookups. */
+export function getDnsCacheDir(): string {
+  return process.env.DMARC_DNS_CACHE_DIR || '.cache/dns';
+}
+
+/**
+ * Optional: the email address that receives DMARC reports. When set, the DNS
+ * check verifies a domain's rua= tag contains it.
+ */
+export function getReportAddress(): string | undefined {
+  return process.env.DMARC_REPORT_ADDRESS?.trim().toLowerCase() || undefined;
 }

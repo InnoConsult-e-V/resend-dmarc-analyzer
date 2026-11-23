@@ -1,5 +1,7 @@
 'use client';
 
+import { describePolicyFields } from '@/lib/dmarc/policy';
+import { formatDateTime } from '@/lib/format-date';
 import type { DMARCAnalysis } from '@/types/dmarc';
 import { RecordsTable } from './records-table';
 import { SummaryCard } from './summary-card';
@@ -10,19 +12,11 @@ interface ReportViewerProps {
 
 export function ReportViewer({ analysis }: ReportViewerProps) {
   const { report, summary, dateRange } = analysis;
+  const fields = describePolicyFields(report.policy_published);
   const passRate =
     summary.totalMessages > 0
       ? ((summary.passedBoth / summary.totalMessages) * 100).toFixed(1)
       : '0';
-
-  const formatDate = (date: Date) =>
-    date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
 
   return (
     <div className="space-y-6">
@@ -42,7 +36,8 @@ export function ReportViewer({ analysis }: ReportViewerProps) {
           </div>
           <div className="text-sm text-gray-6">
             <p>
-              {formatDate(dateRange.start)} — {formatDate(dateRange.end)}
+              {formatDateTime(dateRange.start)} —{' '}
+              {formatDateTime(dateRange.end)}
             </p>
             <p className="text-xs mt-1 font-mono">
               {report.report_metadata.email}
@@ -71,28 +66,34 @@ export function ReportViewer({ analysis }: ReportViewerProps) {
           </div>
           <div>
             <p className="text-xs text-gray-5">Subdomain (sp)</p>
-            <p className="font-medium text-gray-9 capitalize">
-              {report.policy_published.sp}
-            </p>
+            <p className="font-medium text-gray-9 capitalize">{fields.sp}</p>
           </div>
           <div>
             <p className="text-xs text-gray-5">DKIM Alignment</p>
-            <p className="font-medium text-gray-9">
-              {report.policy_published.adkim === 'r' ? 'Relaxed' : 'Strict'}
-            </p>
+            <p className="font-medium text-gray-9">{fields.adkim}</p>
           </div>
           <div>
             <p className="text-xs text-gray-5">SPF Alignment</p>
-            <p className="font-medium text-gray-9">
-              {report.policy_published.aspf === 'r' ? 'Relaxed' : 'Strict'}
-            </p>
+            <p className="font-medium text-gray-9">{fields.aspf}</p>
           </div>
           <div>
             <p className="text-xs text-gray-5">Percentage</p>
-            <p className="font-medium text-gray-9">
-              {report.policy_published.pct}%
-            </p>
+            <p className="font-medium text-gray-9">{fields.pct}</p>
           </div>
+          {fields.np && (
+            <div>
+              <p className="text-xs text-gray-5">
+                Non-existent subdomains (np)
+              </p>
+              <p className="font-medium text-gray-9 capitalize">{fields.np}</p>
+            </div>
+          )}
+          {fields.testing && (
+            <div>
+              <p className="text-xs text-gray-5">Testing (t)</p>
+              <p className="font-medium text-gray-9">{fields.testing}</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -169,7 +170,10 @@ export function ReportViewer({ analysis }: ReportViewerProps) {
         <h3 className="text-sm font-medium text-gray-6 mb-4">
           Records ({report.record.length})
         </h3>
-        <RecordsTable records={report.record} />
+        <RecordsTable
+          records={report.record}
+          reportDomain={report.policy_published.domain}
+        />
       </div>
 
       {/* Auth Results Detail */}

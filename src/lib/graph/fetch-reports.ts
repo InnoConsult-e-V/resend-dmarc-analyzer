@@ -1,5 +1,5 @@
 import 'server-only';
-import { getGraphConfig } from '@/lib/config';
+import { getFetchDays, getGraphConfig } from '@/lib/config';
 import { graphFetch } from './client';
 
 export interface MailboxAttachmentRef {
@@ -25,6 +25,9 @@ interface GraphMessage {
   id: string;
   subject: string | null;
   receivedDateTime: string;
+  hasAttachments: boolean;
+  /** Present because the list query expands attachments. */
+  attachments?: GraphAttachment[];
 }
 
 interface GraphAttachment {
@@ -34,59 +37,105 @@ interface GraphAttachment {
   '@odata.type': string;
 }
 
-const MAX_MESSAGES = 50;
+const PAGE_SIZE = 50;
+// Safety nets so a huge mailbox can't make one fetch run away.
+const MAX_PAGES = 40;
+const MAX_MESSAGES = 1000;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const REPORT_NAME = /\.(xml|xml\.gz|gz|zip)$/i;
 
 /**
- * List the most recent messages with report-like attachments (.xml.gz etc.) in the
- * configured mailbox folder. Only metadata is fetched here; each attachment
- * is downloaded lazily via `download()`, so callers can skip cached ones.
+ * List messages from the last `DMARC_FETCH_DAYS` days (default 90) that carry
+ * report-like attachments (.xml.gz etc.), newest first. Only metadata is
+ * fetched here; each attachment is downloaded lazily via `download()`, so
+ * callers can skip cached ones.
+ *
+ * Graph rejects $orderby combined with a hasAttachments $filter
+ * (InefficientFilter), so messages are ordered by date, paged with
+ * @odata.nextLink, and filtered here. Attachments are expanded inline so a
+ * page of 50 messages costs one request instead of 51.
  */
 export async function listMailboxReports(): Promise<MailboxMessage[]> {
   const { mailbox, folder } = getGraphConfig();
+  const cutoff = Date.now() - getFetchDays() * 24 * 60 * 60 * 1000;
   const user = encodeURIComponent(mailbox);
-  const filter = encodeURIComponent('hasAttachments eq true');
-  const select = 'id,subject,receivedDateTime';
+  const attachmentsBase = (messageId: string) =>
+    `/users/${user}/messages/${encodeURIComponent(messageId)}/attachments`;
 
-  const messagesRes = await graphFetch(
-    `/users/${user}/mailFolders/${encodeURIComponent(folder)}/messages?$filter=${filter}&$select=${select}&$top=${MAX_MESSAGES}`,
-  );
-  const messages = ((await messagesRes.json()) as GraphList<GraphMessage>)
-    .value;
+  const query = new URLSearchParams({
+    $orderby: 'receivedDateTime desc',
+    $select: 'id,subject,receivedDateTime,hasAttachments',
+    $expand: 'attachments($select=id,name,size,contentType)',
+    $top: String(PAGE_SIZE),
+  });
 
   const results: MailboxMessage[] = [];
-  for (const message of messages) {
-    const base = `/users/${user}/messages/${encodeURIComponent(message.id)}/attachments`;
-    const listRes = await graphFetch(`${base}?$select=id,name,size`);
-    const list = ((await listRes.json()) as GraphList<GraphAttachment>).value;
+  let scanned = 0;
+  let url: string | undefined =
+    `/users/${user}/mailFolders/${encodeURIComponent(folder)}/messages?${query}`;
 
-    const attachments: MailboxAttachmentRef[] = list
-      .filter(
-        (att) =>
-          att['@odata.type'] === '#microsoft.graph.fileAttachment' &&
-          REPORT_NAME.test(att.name) &&
-          att.size <= MAX_ATTACHMENT_BYTES,
-      )
-      .map((att) => ({
-        id: att.id,
-        filename: att.name,
-        // $value returns raw bytes and works for attachments of any size.
-        download: async () =>
-          Buffer.from(
-            await (
-              await graphFetch(`${base}/${encodeURIComponent(att.id)}/$value`)
-            ).arrayBuffer(),
-          ),
-      }));
+  for (let page = 0; url && page < MAX_PAGES; page++) {
+    const body = (await (
+      await graphFetch(url)
+    ).json()) as GraphList<GraphMessage>;
 
-    if (attachments.length > 0) {
-      results.push({
-        id: message.id,
-        subject: message.subject ?? '',
-        receivedDateTime: message.receivedDateTime,
-        attachments,
-      });
+    for (const message of body.value) {
+      if (Date.parse(message.receivedDateTime) < cutoff) {
+        url = undefined; // newest first: everything after this is older
+        break;
+      }
+      if (++scanned > MAX_MESSAGES) {
+        url = undefined;
+        break;
+      }
+      if (!message.hasAttachments) {
+        continue;
+      }
+
+      // Fall back to a per-message request if the expansion was omitted.
+      const list =
+        message.attachments ??
+        (
+          (await (
+            await graphFetch(
+              `${attachmentsBase(message.id)}?$select=id,name,size`,
+            )
+          ).json()) as GraphList<GraphAttachment>
+        ).value;
+
+      const attachments: MailboxAttachmentRef[] = list
+        .filter(
+          (att) =>
+            att['@odata.type'] === '#microsoft.graph.fileAttachment' &&
+            REPORT_NAME.test(att.name) &&
+            att.size <= MAX_ATTACHMENT_BYTES,
+        )
+        .map((att) => ({
+          id: att.id,
+          filename: att.name,
+          // $value returns raw bytes and works for attachments of any size.
+          download: async () =>
+            Buffer.from(
+              await (
+                await graphFetch(
+                  `${attachmentsBase(message.id)}/${encodeURIComponent(att.id)}/$value`,
+                )
+              ).arrayBuffer(),
+            ),
+        }));
+
+      if (attachments.length > 0) {
+        results.push({
+          id: message.id,
+          subject: message.subject ?? '',
+          receivedDateTime: message.receivedDateTime,
+          attachments,
+        });
+      }
+    }
+
+    if (url) {
+      url = body['@odata.nextLink'];
     }
   }
 

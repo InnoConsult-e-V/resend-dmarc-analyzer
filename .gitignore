@@ -50,3 +50,6 @@ test-email.html
 
 # local report cache
 /.cache/
+
+# local user data (approved senders, DNS history)
+/.data/
