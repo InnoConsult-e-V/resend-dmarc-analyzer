@@ -100,6 +100,39 @@ export async function setCached(
   }
 }
 
+/**
+ * All valid, unexpired cache entries, newest report first. Used to show
+ * previously fetched reports at startup without calling Graph.
+ */
+export async function listCached(): Promise<CacheEntry[]> {
+  try {
+    const { ttlMs } = getCacheConfig();
+    const dir = cacheDir();
+    const files = (await readdir(dir)).filter((f) => f.endsWith('.json'));
+    const now = Date.now();
+    const entries = await Promise.all(
+      files.map(async (f): Promise<CacheEntry | null> => {
+        try {
+          const parsed: unknown = JSON.parse(
+            await readFile(path.join(dir, f), 'utf-8'),
+          );
+          if (!isEntry(parsed) || now - parsed.cachedAt > ttlMs) {
+            return null;
+          }
+          return parsed;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return entries
+      .filter((e): e is CacheEntry => e !== null)
+      .sort((a, b) => b.receivedDateTime.localeCompare(a.receivedDateTime));
+  } catch {
+    return [];
+  }
+}
+
 /** Delete expired entries, then the oldest ones beyond the size cap. */
 export async function pruneCache(): Promise<void> {
   try {

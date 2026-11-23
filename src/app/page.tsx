@@ -42,6 +42,29 @@ export default function Home() {
     }
   }, []);
 
+  const loadCached = useCallback(async () => {
+    try {
+      const res = await fetch('/api/reports/cached');
+      if (!res.ok) {
+        return;
+      }
+      const data = await res.json();
+      const reports = (data.reports as FetchedReport[]).map((r) => ({
+        ...r,
+        analysis: reviveAnalysis(r.analysis),
+      }));
+      if (reports.length > 0) {
+        // Don't overwrite a fetch that finished while this was loading.
+        setFetched((current) => (current.length > 0 ? current : reports));
+        setFetchNote(
+          `Loaded ${reports.length} report(s) from the local cache (last updated ${new Date(data.lastCachedAt).toLocaleString()}). Fetch from mailbox to check for new ones.`,
+        );
+      }
+    } catch {
+      // The cache is optional; ignore failures.
+    }
+  }, []);
+
   const loadAuth = useCallback(async () => {
     try {
       const res = await fetch('/api/auth/status');
@@ -59,6 +82,7 @@ export default function Home() {
   useEffect(() => {
     loadAuth();
     loadHealth();
+    loadCached();
     const code = new URLSearchParams(window.location.search).get('auth_error');
     if (code) {
       const messages: Record<string, string> = {
@@ -70,7 +94,7 @@ export default function Home() {
       setError(messages[code] ?? 'Sign-in failed.');
       window.history.replaceState({}, '', '/');
     }
-  }, [loadAuth, loadHealth]);
+  }, [loadAuth, loadHealth, loadCached]);
 
   const handleSignOut = async () => {
     await fetch('/api/auth/logout', { method: 'POST' });
