@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { isOwnDomain } from '@/lib/dmarc/identity';
 import type { DMARCRecord } from '@/types/dmarc';
 import { StatusBadge } from './status-badge';
 
@@ -16,9 +17,67 @@ type SortDirection = 'asc' | 'desc';
 
 interface RecordsTableProps {
   records: DMARCRecord[];
+  /** The domain the report is about; identities outside it are marked. */
+  reportDomain?: string;
 }
 
-export function RecordsTable({ records }: RecordsTableProps) {
+/** The identities a record authenticated as: DKIM d=, SPF domain, envelope-from. */
+function RecordIdentities({
+  record,
+  reportDomain,
+}: {
+  record: DMARCRecord;
+  reportDomain?: string;
+}) {
+  const lines: Array<{ label: string; domain: string; note?: string }> = [];
+  for (const d of record.auth_results.dkim ?? []) {
+    lines.push({
+      label: 'DKIM',
+      domain: d.domain,
+      note: d.selector ? `selector ${d.selector}` : undefined,
+    });
+  }
+  for (const s of record.auth_results.spf ?? []) {
+    lines.push({ label: 'SPF', domain: s.domain, note: s.scope });
+  }
+  if (record.identifiers.envelope_from) {
+    lines.push({ label: 'Envelope', domain: record.identifiers.envelope_from });
+  }
+  if (lines.length === 0) {
+    return null;
+  }
+  return (
+    <ul className="space-y-0.5 text-xs">
+      {lines.map((l) => {
+        const external =
+          !!reportDomain && !isOwnDomain(l.domain, [reportDomain]);
+        return (
+          <li
+            key={`${l.label}:${l.domain}:${l.note ?? ''}`}
+            className="flex gap-2"
+          >
+            <span className="w-14 shrink-0 text-gray-6">{l.label}</span>
+            <span
+              className={`font-mono ${external ? 'text-yellow' : 'text-gray-8'}`}
+              title={
+                external
+                  ? 'Not the reported domain: a third-party sender, or possibly spoofing'
+                  : undefined
+              }
+            >
+              {external && <span aria-hidden="true">↗ </span>}
+              {l.domain}
+              {external && <span className="sr-only"> (different domain)</span>}
+              {l.note && <span className="text-gray-6"> ({l.note})</span>}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+export function RecordsTable({ records, reportDomain }: RecordsTableProps) {
   const [sortColumn, setSortColumn] = useState<SortColumn>('count');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
@@ -111,6 +170,9 @@ export function RecordsTable({ records }: RecordsTableProps) {
                 onSort={handleSort}
                 align="left"
               />
+              <th className="text-left px-4 py-3 font-medium text-gray-6">
+                Authenticated as
+              </th>
               <SortableHeader
                 label="DKIM"
                 column="dkim"
@@ -159,6 +221,12 @@ export function RecordsTable({ records }: RecordsTableProps) {
                 </td>
                 <td className="px-4 py-3 text-gray-7 font-mono">
                   {record.identifiers.header_from}
+                </td>
+                <td className="px-4 py-3">
+                  <RecordIdentities
+                    record={record}
+                    reportDomain={reportDomain}
+                  />
                 </td>
                 <td className="px-4 py-3 text-center">
                   {record.row.policy_evaluated && (

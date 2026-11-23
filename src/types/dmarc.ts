@@ -91,6 +91,8 @@ export interface Row {
 // Identifier information
 export interface Identifiers {
   envelope_to?: string;
+  /** MAIL FROM (bounce) domain: the identity SPF is checked against. */
+  envelope_from?: string;
   header_from: string;
 }
 
@@ -105,6 +107,8 @@ export interface DKIMAuthResult {
 // SPF authentication result
 export interface SPFAuthResult {
   domain: string;
+  /** Which identity SPF checked: the MAIL FROM or the HELO/EHLO name. */
+  scope?: 'mfrom' | 'helo';
   result: SPFResultType;
 }
 

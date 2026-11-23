@@ -90,7 +90,10 @@ Secrets are read only from environment variables (never hard-coded). Put them in
 | `DMARC_FETCH_DAYS` | Optional, how many days back a fetch looks (default `90`) |
 | `DMARC_MAILBOX_FOLDER` | Optional folder (default `inbox`) |
 | `DMARC_CACHE_DIR` | Optional cache folder (default `.cache/dmarc`) |
-| `DMARC_CACHE_TTL_HOURS` | Optional cache lifetime (default `168`) |
+| `DMARC_CACHE_TTL_HOURS` | Optional cache lifetime (default `2160`, i.e. 90 days) |
+| `DMARC_CACHE_MAX_ENTRIES` | Optional cache size cap (default `5000`) |
+| `DMARC_REPORT_ADDRESS` | Optional address that receives the reports; the DNS check verifies `rua=` includes it |
+| `DMARC_DNS_CACHE_DIR` | Optional folder for cached reverse-DNS lookups (default `.cache/dns`) |
 
 ## Microsoft Entra / Exchange Online setup
 
@@ -161,9 +164,23 @@ The sign-in refresh token is stored in plain text in `.cache/auth/token.json` (`
 | `Missing configuration: …` | A variable is missing from `.env.local`. Restart `pnpm dev` after editing it. |
 | 0 reports found | Attachment names must end in `.xml`, `.gz` or `.zip`, and only messages from the last 90 days (`DMARC_FETCH_DAYS`) are checked. |
 
+### Dashboard
+
+Open **Dashboard** in the header to see all cached reports together. It reads only the local cache (no Graph call, no sign-in), so it works right after a restart. Each fetch reads the last 90 days of mail (`DMARC_FETCH_DAYS`), and the cache means only new reports are downloaded.
+
+- **Filters** (one row, scoping everything below): date range (7/30/90 days or all time, relative to now) and domain.
+- **Metrics:** each message is counted as *passed both* (aligned DKIM and SPF passed), *passed one*, or *failed both*. The headline rate is *passed both / messages*, the same definition as the per-report card. Counts are weighted by each record's message count. Repeated reports are de-duplicated by reporter and report ID. Days are UTC days of the report's start time.
+- **Daily chart:** stacked columns of the three outcomes, with a table view and keyboard support (arrow keys read each day).
+- **Sending sources:** each source IP is shown with its reverse-DNS name, confirmed by a forward lookup. Sources are marked *Healthy* (at least 95% passed both), *Failing* (at least 50% failed both), otherwise *Mixed*. A failing source with at least 10 messages and no confirmed reverse DNS is flagged *Suspicious*.
+- **DNS check** (per domain, on demand): looks up the live DMARC, SPF and DKIM records (for the selectors seen in your reports) and reports problems such as a missing record, `p=none`, `pct<100`, no `rua=`, multiple SPF records, a permissive `all`, or revoked DKIM keys. If `DMARC_REPORT_ADDRESS` is set, it also checks that `rua=` includes it.
+
+**What a report tells you about senders:** an aggregate (RUA) report identifies the *reporter* (organisation, contact address, report ID) and, per group of messages, the *sending server* (source IP), the visible *From domain*, the *DKIM signing domain and selector*, the *SPF domain* (and whether SPF checked the MAIL FROM or HELO name) and, if the reporter includes it, the *envelope-from* domain. It never contains individual sender addresses, subjects, message IDs or content; that only appears in forensic (RUF) reports, which this app does not read. The dashboard's **Sends as** column and the per-report **Authenticated as** column show these identities and mark (with ↗) any domain that is not one of the reported domains, which usually means a third-party sender (for example a mailing service signing with its own domain) and occasionally spoofing. Envelope-from and SPF scope are captured from now on; reports cached before that need one **Force refresh** to include them.
+
+Privacy: reverse and DNS lookups go only to your machine's own DNS resolver. No third-party IP, geo or reputation services are used. Only domains and IPs that appear in your cached reports can be looked up. Lookup results are cached in `.cache/dns`.
+
 ### Caching
 
-Parsed reports are cached on disk (one JSON file per attachment, under `.cache/dmarc`, git-ignored), so repeat fetches only download and parse new messages. **Force refresh** in the UI bypasses the cache. The cache holds report data (domains, source IPs) in plain text with `0600` file permissions. Delete the folder to clear it.
+Parsed reports are cached on disk (one JSON file per attachment, under `.cache/dmarc`, git-ignored), so repeat fetches only download and parse new messages. **Force refresh** in the UI bypasses the cache. Entries are kept for 90 days by default so the dashboard can show trends, which means report data stays on disk in plain text for that long; lower `DMARC_CACHE_TTL_HOURS` if that is too long. The cache holds report data (domains, source IPs) in plain text with `0600` file permissions. Delete the folder to clear it.
 
 Email digest sending is currently disabled. The template in `src/emails/dmarc-report.tsx` is kept so a transport can be added later.
 

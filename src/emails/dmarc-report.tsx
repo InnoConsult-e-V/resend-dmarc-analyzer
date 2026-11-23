@@ -13,6 +13,7 @@ import {
   Tailwind,
   Text,
 } from 'react-email';
+import { formatDateTime } from '@/lib/format-date';
 import type { DMARCAnalysis, DMARCRecord } from '@/types/dmarc';
 
 interface DMARCReportEmailProps {
@@ -25,13 +26,6 @@ export function DMARCReportEmail({ analysis }: DMARCReportEmailProps) {
     summary.totalMessages > 0
       ? ((summary.passedBoth / summary.totalMessages) * 100).toFixed(1)
       : '0';
-
-  const formatDate = (date: Date) =>
-    date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
 
   return (
     <Html>
@@ -49,7 +43,8 @@ export function DMARCReportEmail({ analysis }: DMARCReportEmailProps) {
                 DMARC report analysis
               </Heading>
               <Text className="text-[#6b6b6b] text-sm mt-2 mb-0">
-                {formatDate(dateRange.start)} — {formatDate(dateRange.end)}
+                {formatDateTime(dateRange.start)} —{' '}
+                {formatDateTime(dateRange.end)}
               </Text>
             </Section>
 

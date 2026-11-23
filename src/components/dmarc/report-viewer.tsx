@@ -1,5 +1,6 @@
 'use client';
 
+import { formatDateTime } from '@/lib/format-date';
 import type { DMARCAnalysis } from '@/types/dmarc';
 import { RecordsTable } from './records-table';
 import { SummaryCard } from './summary-card';
@@ -14,15 +15,6 @@ export function ReportViewer({ analysis }: ReportViewerProps) {
     summary.totalMessages > 0
       ? ((summary.passedBoth / summary.totalMessages) * 100).toFixed(1)
       : '0';
-
-  const formatDate = (date: Date) =>
-    date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
 
   return (
     <div className="space-y-6">
@@ -42,7 +34,8 @@ export function ReportViewer({ analysis }: ReportViewerProps) {
           </div>
           <div className="text-sm text-gray-6">
             <p>
-              {formatDate(dateRange.start)} — {formatDate(dateRange.end)}
+              {formatDateTime(dateRange.start)} —{' '}
+              {formatDateTime(dateRange.end)}
             </p>
             <p className="text-xs mt-1 font-mono">
               {report.report_metadata.email}
@@ -169,7 +162,10 @@ export function ReportViewer({ analysis }: ReportViewerProps) {
         <h3 className="text-sm font-medium text-gray-6 mb-4">
           Records ({report.record.length})
         </h3>
-        <RecordsTable records={report.record} />
+        <RecordsTable
+          records={report.record}
+          reportDomain={report.policy_published.domain}
+        />
       </div>
 
       {/* Auth Results Detail */}

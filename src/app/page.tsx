@@ -1,10 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { AppHeader } from '@/components/app-header';
 import { ReportViewer } from '@/components/dmarc';
-import { type HealthState, StatusPill } from '@/components/status-pill';
+import { StatusBanner } from '@/components/status-banner';
+import { useHealth } from '@/hooks/use-health';
 import { parseAndAnalyze } from '@/lib/dmarc/parser';
 import { reviveAnalysis } from '@/lib/dmarc/revive';
+import { formatDateTime } from '@/lib/format-date';
 import type { DMARCAnalysis } from '@/types/dmarc';
 
 interface FetchedReport {
@@ -27,20 +30,7 @@ export default function Home() {
     account: string | null;
   }>({ checked: false, signedIn: false, account: null });
 
-  const [health, setHealth] = useState<HealthState>({
-    status: 'checking',
-    detail: 'Checking system status',
-  });
-
-  const loadHealth = useCallback(async () => {
-    setHealth({ status: 'checking', detail: 'Checking system status' });
-    try {
-      const res = await fetch('/api/health');
-      setHealth(await res.json());
-    } catch {
-      setHealth({ status: 'error', detail: 'Could not reach the app server' });
-    }
-  }, []);
+  const { health, loadHealth } = useHealth();
 
   const loadCached = useCallback(async () => {
     try {
@@ -57,7 +47,7 @@ export default function Home() {
         // Don't overwrite a fetch that finished while this was loading.
         setFetched((current) => (current.length > 0 ? current : reports));
         setFetchNote(
-          `Loaded ${reports.length} report(s) from the local cache (last updated ${new Date(data.lastCachedAt).toLocaleString()}). Fetch from mailbox to check for new ones.`,
+          `Loaded ${reports.length} report(s) from the local cache (last updated ${formatDateTime(data.lastCachedAt)}). Fetch from mailbox to check for new ones.`,
         );
       }
     } catch {
@@ -170,69 +160,14 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-gray-3">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <svg
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-              className="text-gray-10"
-            >
-              <path
-                d="M3 8L10.89 13.26C11.2187 13.4793 11.6049 13.5963 12 13.5963C12.3951 13.5963 12.7813 13.4793 13.11 13.26L21 8M5 19H19C19.5304 19 20.0391 18.7893 20.4142 18.4142C20.7893 18.0391 21 17.5304 21 17V7C21 6.46957 20.7893 5.96086 20.4142 5.58579C20.0391 5.21071 19.5304 5 19 5H5C4.46957 5 3.96086 5.21071 3.58579 5.58579C3.21071 5.96086 3 6.46957 3 7V17C3 17.5304 3.21071 18.0391 3.58579 18.4142C3.96086 18.7893 4.46957 19 5 19Z"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <h1 className="text-lg font-semibold text-gray-10">
-              DMARC Analyzer
-            </h1>
-          </div>
-          <StatusPill health={health} onRecheck={loadHealth} />
-        </div>
-      </header>
+      <AppHeader health={health} onRecheck={loadHealth} />
 
-      {/* Status messages */}
-      {(error || fetchNote) && (
-        <div
-          className="max-w-6xl mx-auto px-4 pt-4 space-y-2"
-          aria-live="polite"
-        >
-          {error && (
-            <div
-              role="alert"
-              className="flex items-start justify-between gap-4 bg-red-dim border border-red/30 rounded-lg px-4 py-3 text-sm text-red"
-            >
-              <span>{error}</span>
-              <button
-                onClick={() => setError(null)}
-                className="shrink-0 opacity-70 hover:opacity-100"
-                aria-label="Dismiss error"
-              >
-                ✕
-              </button>
-            </div>
-          )}
-          {fetchNote && (
-            <div className="flex items-start justify-between gap-4 bg-gray-2 border border-gray-3 rounded-lg px-4 py-3 text-sm text-gray-8">
-              <span>{fetchNote}</span>
-              <button
-                onClick={() => setFetchNote(null)}
-                className="shrink-0 text-gray-6 hover:text-gray-9"
-                aria-label="Dismiss message"
-              >
-                ✕
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+      <StatusBanner
+        error={error}
+        note={fetchNote}
+        onDismissError={() => setError(null)}
+        onDismissNote={() => setFetchNote(null)}
+      />
 
       <main className="max-w-6xl mx-auto px-4 py-8">
         {!analysis ? (
@@ -301,7 +236,7 @@ export default function Home() {
                         {r.analysis.report.policy_published.domain}
                         <span className="text-gray-6">
                           {' '}
-                          · {new Date(r.receivedDateTime).toLocaleString()}
+                          · {formatDateTime(r.receivedDateTime)}
                         </span>
                       </button>
                     </li>
