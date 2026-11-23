@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { ReportViewer } from '@/components/dmarc';
+import { type HealthState, StatusPill } from '@/components/status-pill';
 import { parseAndAnalyze } from '@/lib/dmarc/parser';
 import { reviveAnalysis } from '@/lib/dmarc/revive';
 import type { DMARCAnalysis } from '@/types/dmarc';
@@ -26,6 +27,21 @@ export default function Home() {
     account: string | null;
   }>({ checked: false, signedIn: false, account: null });
 
+  const [health, setHealth] = useState<HealthState>({
+    status: 'checking',
+    detail: 'Checking system status',
+  });
+
+  const loadHealth = useCallback(async () => {
+    setHealth({ status: 'checking', detail: 'Checking system status' });
+    try {
+      const res = await fetch('/api/health');
+      setHealth(await res.json());
+    } catch {
+      setHealth({ status: 'error', detail: 'Could not reach the app server' });
+    }
+  }, []);
+
   const loadAuth = useCallback(async () => {
     try {
       const res = await fetch('/api/auth/status');
@@ -42,6 +58,7 @@ export default function Home() {
 
   useEffect(() => {
     loadAuth();
+    loadHealth();
     const code = new URLSearchParams(window.location.search).get('auth_error');
     if (code) {
       const messages: Record<string, string> = {
@@ -53,13 +70,14 @@ export default function Home() {
       setError(messages[code] ?? 'Sign-in failed.');
       window.history.replaceState({}, '', '/');
     }
-  }, [loadAuth]);
+  }, [loadAuth, loadHealth]);
 
   const handleSignOut = async () => {
     await fetch('/api/auth/logout', { method: 'POST' });
     setFetched([]);
     setFetchNote(null);
     loadAuth();
+    loadHealth();
   };
 
   const handleAnalyze = () => {
@@ -116,6 +134,7 @@ export default function Home() {
       setError(err instanceof Error ? err.message : 'Failed to fetch reports');
     } finally {
       setIsFetching(false);
+      loadHealth();
     }
   };
 
@@ -151,6 +170,7 @@ export default function Home() {
               DMARC Analyzer
             </h1>
           </div>
+          <StatusPill health={health} onRecheck={loadHealth} />
         </div>
       </header>
 

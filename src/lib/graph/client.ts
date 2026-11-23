@@ -23,11 +23,21 @@ export function resetAccessToken(): void {
   cachedToken = null;
 }
 
+// Share one in-flight refresh so concurrent requests (e.g. a health check and
+// a fetch) don't both redeem the same rotating refresh token.
+let refreshing: Promise<string> | null = null;
+
 async function getAccessToken(): Promise<string> {
   if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
     return cachedToken.value;
   }
+  refreshing ??= refreshStoredToken().finally(() => {
+    refreshing = null;
+  });
+  return refreshing;
+}
 
+async function refreshStoredToken(): Promise<string> {
   const stored = await readAuth();
   if (!stored) {
     throw new NotSignedInError();
