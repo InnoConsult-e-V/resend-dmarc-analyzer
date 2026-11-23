@@ -194,6 +194,14 @@ The thresholds are constants in `src/lib/dashboard/readiness.ts`: at most **2%**
 
 The readiness metric, **survives enforcement**, counts every message that passed at least one of DKIM or SPF, because that is what DMARC requires. The stricter **passed both** figure (both aligned checks passed) is shown separately; the two are labelled so they are not confused.
 
+#### DMARCbis (the 2026 revision of DMARC)
+
+DMARC was revised in May 2026 (RFC 9989, 9990, 9991). The app reads both the original and the new aggregate report format:
+
+- `pct` is gone in the new format. When a report has no `pct` the policy is treated as applying to all failing mail, and the app never shows `NaN` or `undefined`. Optional tags (`sp`, `adkim`, `aspf`) are shown as "same as p" or "relaxed (default)" when absent.
+- `t=y` (testing) means receivers do **not** apply the policy, like the old `pct=0`. Readiness treats `p=quarantine` with `t=y` as *not enforced* and tells you to remove `t=y` once the checks pass.
+- New tags `np`, `testing`, `discovery_method`, `version` and `generator` are read and shown where useful. The DNS check explains `pct`, `rf` and `ri` as deprecated, understands `t`, `np` and `psd`, and suggests `np=reject` for enforced policies.
+
 #### Dashboard details
 
 - **Trends range:** date range (7/30/90 days or all time, relative to now) for the chart and totals.

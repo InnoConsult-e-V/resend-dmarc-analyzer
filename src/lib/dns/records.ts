@@ -1,6 +1,6 @@
 import 'server-only';
 import { Resolver } from 'node:dns/promises';
-import type { DispositionType } from '@/types/dmarc';
+import type { PublishedPolicy } from '@/lib/dmarc/policy';
 
 /**
  * DNS health check for a domain's DMARC, SPF and DKIM records. The resolver is
@@ -50,7 +50,7 @@ export interface DnsCheckContext {
   /** Address that should appear in rua= (DMARC_REPORT_ADDRESS), if known. */
   reportAddress?: string;
   /** Policy from the most recent report, to detect record changes. */
-  published?: { p: DispositionType; sp: DispositionType; pct: number } | null;
+  published?: PublishedPolicy | null;
   resolver?: TxtResolver;
 }
 
@@ -156,10 +156,55 @@ export function judgeDmarc(
     findings.push({ severity: 'error', message: 'Missing or invalid p= tag' });
   }
 
-  if (tags.pct !== undefined && Number(tags.pct) < 100) {
+  // DMARCbis (RFC 9989) replaced pct with t and removed rf/ri.
+  const testing = (tags.t ?? '').toLowerCase();
+  if (tags.t !== undefined) {
+    if (testing === 'y') {
+      findings.push({
+        severity: 'info',
+        message:
+          't=y: testing mode. Receivers that implement DMARCbis do not apply the policy (like pct=0).',
+      });
+    } else if (testing !== 'n') {
+      findings.push({
+        severity: 'warn',
+        message: `t=${tags.t} is not a valid value (use y or n)`,
+      });
+    }
+  }
+  if (tags.pct !== undefined) {
+    const n = Number(tags.pct);
+    findings.push(
+      n < 100
+        ? {
+            severity: 'warn',
+            message: `pct=${tags.pct}: older receivers apply the policy to only ${tags.pct}% of failing mail, but pct is removed in DMARCbis, so newer receivers ignore it and apply the policy to all failing mail. Use t=y to test instead.`,
+          }
+        : {
+            severity: 'info',
+            message:
+              'pct=100 is redundant: pct is removed in DMARCbis and 100 is the default.',
+          },
+    );
+  }
+  if (tags.rf !== undefined || tags.ri !== undefined) {
     findings.push({
-      severity: 'warn',
-      message: `pct=${tags.pct}: the policy only applies to part of your mail`,
+      severity: 'info',
+      message:
+        'rf= and ri= are removed in DMARCbis and ignored by new receivers.',
+    });
+  }
+  if (policy !== 'none' && policy !== '' && tags.np === undefined) {
+    findings.push({
+      severity: 'info',
+      message:
+        'No np= tag: consider np=reject to block mail from subdomains that do not exist (DMARCbis).',
+    });
+  }
+  if (tags.psd !== undefined) {
+    findings.push({
+      severity: 'info',
+      message: `psd=${tags.psd} (declares whether this is a public suffix domain)`,
     });
   }
 

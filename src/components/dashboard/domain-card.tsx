@@ -2,15 +2,14 @@
 
 import Link from 'next/link';
 import type { OverviewDomain } from '@/lib/dashboard/overview';
+import { formatPolicy } from '@/lib/dmarc/policy';
 import { ReadinessChip } from './readiness-chip';
 
 const pct = (v: number | null) => (v === null ? '-' : `${v.toFixed(1)}%`);
 
 export function DomainCard({ domain }: { domain: OverviewDomain }) {
   const { readiness: r } = domain;
-  const policy = r.published
-    ? `p=${r.published.p} · sp=${r.published.sp} · pct=${r.published.pct}`
-    : 'no policy seen';
+  const policy = formatPolicy(r.published);
   return (
     <Link
       href={`/domains/${encodeURIComponent(domain.domain)}`}

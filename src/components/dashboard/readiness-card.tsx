@@ -1,6 +1,7 @@
 'use client';
 
 import type { Readiness } from '@/lib/dashboard/readiness';
+import { formatPolicy } from '@/lib/dmarc/policy';
 import { ReadinessChip } from './readiness-chip';
 
 const SEV = {
@@ -30,7 +31,7 @@ export function ReadinessCard({ readiness: r, dnsLoading }: Props) {
           <p className="text-sm text-gray-6">
             Based on the last {m.windowDays} days
             {r.published
-              ? ` · published policy p=${r.published.p}, pct=${r.published.pct}`
+              ? ` · published policy ${formatPolicy(r.published)}`
               : ''}
           </p>
         </div>

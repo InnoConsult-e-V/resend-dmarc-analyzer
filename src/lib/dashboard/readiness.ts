@@ -1,3 +1,8 @@
+import {
+  effectivePolicy,
+  type PublishedPolicy,
+  publishedOf,
+} from '@/lib/dmarc/policy';
 import type { DomainDnsReport, Finding } from '@/lib/dns/records';
 import type { DispositionType } from '@/types/dmarc';
 import { type AggregateEntry, aggregate, dedupeEntries } from './aggregate';
@@ -64,7 +69,7 @@ export interface ReviewSource {
 export interface Readiness {
   domain: string;
   stage: DispositionType;
-  published: { p: DispositionType; sp: DispositionType; pct: number } | null;
+  published: PublishedPolicy | null;
   status: ReadinessStatus;
   nextStep: string;
   checks: ReadinessCheck[];
@@ -131,10 +136,13 @@ function finalize(r: Omit<Readiness, 'status' | 'nextStep'>): Readiness {
     nextStep = `Almost there: ${firstOf('warn')}`;
   } else {
     status = 'ready';
+    const declared = r.published?.p ?? 'none';
     nextStep =
-      stage === 'none'
-        ? 'Ready for p=quarantine. Start with pct=25 and raise it step by step.'
-        : 'Ready for p=reject.';
+      r.published?.testing === 'y' && declared !== 'none'
+        ? `Ready to enforce p=${declared}: remove t=y (or set t=n).`
+        : stage === 'none'
+          ? 'Ready for p=quarantine. Start with pct=25 and raise it step by step.'
+          : 'Ready for p=reject.';
   }
 
   return { ...r, status, nextStep };
@@ -157,21 +165,18 @@ export function assessReadiness(
       a.analysis.report.report_metadata.date_range.begin,
   );
   const latest = byBegin[0]?.analysis.report;
-  const published = latest
-    ? {
-        p: latest.policy_published.p,
-        sp: latest.policy_published.sp,
-        pct: latest.policy_published.pct,
-      }
-    : null;
-  const stage: DispositionType = published?.p ?? 'none';
+  const published = latest ? publishedOf(latest.policy_published) : null;
+  // What receivers actually apply: p=quarantine with t=y behaves like none.
+  const stage: DispositionType = published
+    ? effectivePolicy(published).stage
+    : 'none';
 
   let daysAtCurrentPolicy: number | null = null;
   if (latest) {
     let earliestBegin = latest.report_metadata.date_range.begin;
     for (const e of byBegin) {
       const r = e.analysis.report;
-      if (r.policy_published.p !== stage) {
+      if (effectivePolicy(r.policy_published).stage !== stage) {
         break;
       }
       earliestBegin = r.report_metadata.date_range.begin;
@@ -297,8 +302,24 @@ export function assessReadiness(
     });
   }
 
-  // 6. pct
-  if (published && published.p !== 'none' && published.pct < 100) {
+  // 6. Test mode (DMARCbis t=y): the declared policy is not applied
+  if (published && published.testing === 'y' && published.p !== 'none') {
+    checks.push({
+      id: 'testing',
+      severity: 'info',
+      title: 'Test mode',
+      message: `p=${published.p} is in test mode (t=y): receivers do not apply it yet. Remove t=y (or set t=n) to enforce it.`,
+    });
+  }
+
+  // 7. pct (only present in reports using the original format)
+  if (
+    published &&
+    published.testing !== 'y' &&
+    published.p !== 'none' &&
+    typeof published.pct === 'number' &&
+    published.pct < 100
+  ) {
     checks.push({
       id: 'pct',
       severity: 'warn',

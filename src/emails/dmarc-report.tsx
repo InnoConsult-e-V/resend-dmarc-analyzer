@@ -13,6 +13,7 @@ import {
   Tailwind,
   Text,
 } from 'react-email';
+import { describePolicyFields } from '@/lib/dmarc/policy';
 import { formatDateTime } from '@/lib/format-date';
 import type { DMARCAnalysis, DMARCRecord } from '@/types/dmarc';
 
@@ -22,6 +23,7 @@ interface DMARCReportEmailProps {
 
 export function DMARCReportEmail({ analysis }: DMARCReportEmailProps) {
   const { report, summary, dateRange } = analysis;
+  const fields = describePolicyFields(report.policy_published);
   const passRate =
     summary.totalMessages > 0
       ? ((summary.passedBoth / summary.totalMessages) * 100).toFixed(1)
@@ -178,7 +180,7 @@ export function DMARCReportEmail({ analysis }: DMARCReportEmailProps) {
                 <Column className="w-1/3">
                   <Text className="text-[#454545] text-xs m-0">Subdomain</Text>
                   <Text className="text-[#d4d4d4] text-sm m-0 mt-1 capitalize">
-                    {report.policy_published.sp}
+                    {fields.sp}
                   </Text>
                 </Column>
               </Row>
@@ -188,9 +190,7 @@ export function DMARCReportEmail({ analysis }: DMARCReportEmailProps) {
                     DKIM Alignment
                   </Text>
                   <Text className="text-[#d4d4d4] text-sm m-0 mt-1">
-                    {report.policy_published.adkim === 'r'
-                      ? 'Relaxed'
-                      : 'Strict'}
+                    {fields.adkim}
                   </Text>
                 </Column>
                 <Column className="w-1/3">
@@ -198,15 +198,13 @@ export function DMARCReportEmail({ analysis }: DMARCReportEmailProps) {
                     SPF Alignment
                   </Text>
                   <Text className="text-[#d4d4d4] text-sm m-0 mt-1">
-                    {report.policy_published.aspf === 'r'
-                      ? 'Relaxed'
-                      : 'Strict'}
+                    {fields.aspf}
                   </Text>
                 </Column>
                 <Column className="w-1/3">
                   <Text className="text-[#454545] text-xs m-0">Percentage</Text>
                   <Text className="text-[#d4d4d4] text-sm m-0 mt-1">
-                    {report.policy_published.pct}%
+                    {fields.pct}
                   </Text>
                 </Column>
               </Row>

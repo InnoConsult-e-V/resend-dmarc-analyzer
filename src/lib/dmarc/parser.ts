@@ -12,7 +12,9 @@ const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
   textNodeName: '#text',
-  parseTagValue: true,
+  // Keep every value as text so long numeric-looking IDs are not rounded;
+  // numbers are converted explicitly below.
+  parseTagValue: false,
   trimValues: true,
   isArray: (name) => {
     // These elements can appear multiple times
@@ -35,25 +37,37 @@ export function parseDMARCXML(xml: string): DMARCReport {
   // Normalize records to always be an array
   const records = normalizeToArray(feedback.record);
 
+  const meta = feedback.report_metadata ?? {};
+  const pp = feedback.policy_published ?? {};
+  const version = textOf(feedback.version);
+
   const report: DMARCReport = {
+    ...(version ? { version } : {}),
     report_metadata: {
-      org_name: feedback.report_metadata.org_name,
-      email: feedback.report_metadata.email,
-      extra_contact_info: feedback.report_metadata.extra_contact_info,
-      report_id: String(feedback.report_metadata.report_id),
+      org_name: textOf(meta.org_name) ?? '',
+      email: textOf(meta.email) ?? '',
+      extra_contact_info: textOf(meta.extra_contact_info),
+      report_id: String(textOf(meta.report_id) ?? ''),
       date_range: {
-        begin: Number(feedback.report_metadata.date_range.begin),
-        end: Number(feedback.report_metadata.date_range.end),
+        begin: Number(meta.date_range?.begin),
+        end: Number(meta.date_range?.end),
       },
-      error: normalizeToArray(feedback.report_metadata.error),
+      error: normalizeToArray(meta.error)
+        .map((e) => textOf(e))
+        .filter((e): e is string => !!e),
+      generator: textOf(meta.generator),
     },
     policy_published: {
-      domain: feedback.policy_published.domain,
-      adkim: feedback.policy_published.adkim,
-      aspf: feedback.policy_published.aspf,
-      p: feedback.policy_published.p,
-      sp: feedback.policy_published.sp,
-      pct: Number(feedback.policy_published.pct),
+      domain: textOf(pp.domain) ?? '',
+      p: normalizeDisposition(pp.p),
+      adkim: alignment(pp.adkim),
+      aspf: alignment(pp.aspf),
+      sp: optionalDisposition(pp.sp),
+      np: optionalDisposition(pp.np),
+      pct: optionalNumber(pp.pct),
+      testing: testing(pp.testing),
+      discovery_method: discoveryMethod(pp.discovery_method),
+      fo: textOf(pp.fo),
     },
     record: records.map(parseRecord),
   };
@@ -61,11 +75,54 @@ export function parseDMARCXML(xml: string): DMARCReport {
   return report;
 }
 
+/** Text of an element that may carry attributes (e.g. `<error lang="en">`). */
+function textOf(node: unknown): string | undefined {
+  if (node === undefined || node === null) {
+    return undefined;
+  }
+  const raw =
+    typeof node === 'object'
+      ? (node as Record<string, unknown>)['#text']
+      : node;
+  const text = raw === undefined || raw === null ? '' : String(raw).trim();
+  return text === '' ? undefined : text;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  const text = textOf(value);
+  if (text === undefined) {
+    return undefined;
+  }
+  const n = Number(text);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function optionalDisposition(
+  value: unknown,
+): 'none' | 'quarantine' | 'reject' | undefined {
+  return textOf(value) === undefined ? undefined : normalizeDisposition(value);
+}
+
+function alignment(value: unknown): 'r' | 's' | undefined {
+  const t = textOf(value)?.toLowerCase();
+  return t === 'r' || t === 's' ? t : undefined;
+}
+
+function testing(value: unknown): 'y' | 'n' | undefined {
+  const t = textOf(value)?.toLowerCase();
+  return t === 'y' || t === 'n' ? t : undefined;
+}
+
+function discoveryMethod(value: unknown): 'psl' | 'treewalk' | undefined {
+  const t = textOf(value)?.toLowerCase();
+  return t === 'psl' || t === 'treewalk' ? t : undefined;
+}
+
 function parseRecord(record: unknown): DMARCRecord {
   const r = record as Record<string, unknown>;
   const row = r.row as Record<string, unknown>;
-  const identifiers = r.identifiers as Record<string, unknown>;
-  const authResults = r.auth_results as Record<string, unknown>;
+  const identifiers = (r.identifiers ?? {}) as Record<string, unknown>;
+  const authResults = (r.auth_results ?? {}) as Record<string, unknown>;
   const policyEvaluated = row.policy_evaluated as
     | Record<string, unknown>
     | undefined;

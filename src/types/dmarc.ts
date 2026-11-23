@@ -55,16 +55,26 @@ export interface ReportMetadata {
   report_id: string;
   date_range: DateRange;
   error?: string[];
+  /** RFC 9990: software that generated the report. */
+  generator?: string;
 }
 
 // DMARC policy that applied to messages in this report
 export interface PolicyPublished {
   domain: string;
-  adkim: AlignmentType;
-  aspf: AlignmentType;
   p: DispositionType;
-  sp: DispositionType;
-  pct: number;
+  // Optional: RFC 9990 (DMARCbis) reports omit these when not published.
+  adkim?: AlignmentType;
+  aspf?: AlignmentType;
+  sp?: DispositionType;
+  /** Policy for non-existent subdomains (DMARCbis). */
+  np?: DispositionType;
+  /** Removed in DMARCbis; absent means 100. */
+  pct?: number;
+  /** DMARCbis `t` tag: `y` means the policy is not applied (test mode). */
+  testing?: 'y' | 'n';
+  discovery_method?: 'psl' | 'treewalk';
+  fo?: string;
 }
 
 // Policy override reason
@@ -127,6 +137,8 @@ export interface DMARCRecord {
 
 // Complete DMARC Feedback Report (RUA)
 export interface DMARCReport {
+  /** RFC 9990 `version` element (1.0) when present. */
+  version?: string;
   report_metadata: ReportMetadata;
   policy_published: PolicyPublished;
   record: DMARCRecord[];

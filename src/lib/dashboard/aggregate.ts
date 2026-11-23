@@ -1,5 +1,6 @@
 import { externalDomains } from '@/lib/dmarc/identity';
-import type { DispositionType, DMARCAnalysis } from '@/types/dmarc';
+import { type PublishedPolicy, publishedOf } from '@/lib/dmarc/policy';
+import type { DMARCAnalysis } from '@/types/dmarc';
 
 /**
  * Cross-report aggregation for the dashboard. Pure functions (no I/O) so they
@@ -38,9 +39,8 @@ export interface DayBucket extends Counts {
 
 export interface DomainStats extends Counts {
   domain: string;
-  p: DispositionType;
-  sp: DispositionType;
-  pct: number;
+  /** Latest published policy (fields absent from the report stay undefined). */
+  published: PublishedPolicy;
   reports: number;
   lastReportAt: string;
 }
@@ -244,9 +244,7 @@ export function aggregate(
       byDomain.get(domain) ??
       ({
         domain,
-        p: report.policy_published.p,
-        sp: report.policy_published.sp,
-        pct: report.policy_published.pct,
+        published: publishedOf(report.policy_published),
         reports: 0,
         lastReportAt: '',
         ...emptyCounts(),
@@ -396,7 +394,7 @@ export function domainContext(
 ): {
   known: boolean;
   selectors: string[];
-  published: { p: DispositionType; sp: DispositionType; pct: number } | null;
+  published: PublishedPolicy | null;
 } {
   const { unique } = dedupeEntries(entries);
   const selectors = new Set<string>();
@@ -408,11 +406,7 @@ export function domainContext(
       continue;
     }
     known = true;
-    published ??= {
-      p: r.policy_published.p,
-      sp: r.policy_published.sp,
-      pct: r.policy_published.pct,
-    };
+    published ??= publishedOf(r.policy_published);
     for (const rec of r.record) {
       for (const d of rec.auth_results.dkim ?? []) {
         if (d.selector && d.domain.toLowerCase() === domain.toLowerCase()) {

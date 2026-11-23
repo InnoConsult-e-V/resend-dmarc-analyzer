@@ -1,3 +1,4 @@
+import { formatPolicy, publishedOf } from '@/lib/dmarc/policy';
 import {
   type AggregateEntry,
   aggregate,
@@ -73,8 +74,7 @@ function policyOf(entries: AggregateEntry[]): string | null {
   if (!best) {
     return null;
   }
-  const p = best.analysis.report.policy_published;
-  return `p=${p.p}, pct=${p.pct}`;
+  return formatPolicy(publishedOf(best.analysis.report.policy_published));
 }
 
 export function computeChanges(
