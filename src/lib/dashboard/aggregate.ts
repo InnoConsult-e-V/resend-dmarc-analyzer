@@ -64,6 +64,8 @@ export interface SourceStats extends Counts {
   spfDomains: string[];
   firstSeen: string;
   lastSeen: string;
+  /** Earliest time a report mentioning this source was received (mailbox time). */
+  firstReceivedAt: string;
 }
 
 export interface ReporterStats {
@@ -290,6 +292,7 @@ export function aggregate(
           spfDomains: [],
           firstSeen: reportEnd,
           lastSeen: reportEnd,
+          firstReceivedAt: entry.receivedDateTime,
           ...emptyCounts(),
           _from: new Set<string>(),
           _efrom: new Set<string>(),
@@ -314,6 +317,9 @@ export function aggregate(
       }
       if (reportEnd > src.lastSeen) {
         src.lastSeen = reportEnd;
+      }
+      if (entry.receivedDateTime < src.firstReceivedAt) {
+        src.firstReceivedAt = entry.receivedDateTime;
       }
       src._from.add(record.identifiers.header_from);
       if (record.identifiers.envelope_from) {

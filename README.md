@@ -15,34 +15,37 @@ A Next.js application to analyze DMARC aggregate reports (RUA) and forensic repo
 ```
 src/
 ├── app/
+│   ├── page.tsx                      # Dashboard (home): sync, changes, domains, trends
+│   ├── domains/[domain]/page.tsx     # Domain page: readiness, trends, DNS, sources
+│   ├── reports/page.tsx              # Report viewer and paste-XML analyzer
 │   ├── api/
-│   │   ├── analyze/route.ts          # POST endpoint for frontend parsing
-│   │   └── webhooks/dmarc/
-│   │       ├── rua/route.ts          # Aggregate report webhook
-│   │       └── ruf/route.ts          # Forensic report webhook (pass-through)
-│   ├── page.tsx                      # Paste-and-analyze frontend
-│   ├── layout.tsx                    # App layout
-│   └── globals.css                   # Resend-style dark theme
-├── components/dmarc/
-│   ├── summary-card.tsx              # Stats card component
-│   ├── status-badge.tsx              # Pass/fail badges
-│   ├── records-table.tsx             # Records table with auth results
-│   └── report-viewer.tsx             # Main report display component
-├── emails/
-│   └── dmarc-report.tsx              # React Email template
+│   │   ├── overview/                 # Last sync/review, changes, per-domain readiness
+│   │   ├── review/                   # "Mark as reviewed"
+│   │   ├── dashboard/                # Aggregates; enrich (reverse DNS); dns (record check)
+│   │   ├── reports/                  # fetch (mailbox sync), cached
+│   │   ├── auth/                     # Microsoft sign-in (login, callback, status, logout)
+│   │   ├── health/                   # Status pill check
+│   │   └── analyze/                  # Parse pasted XML
+│   └── layout.tsx, globals.css       # Layout and dark theme
+├── components/
+│   ├── dashboard/                    # Cards, chart, tables, readiness and DNS panels
+│   ├── dmarc/                        # Per-report viewer components
+│   ├── app-header.tsx, mailbox-controls.tsx, status-banner.tsx, status-pill.tsx
+├── hooks/                            # use-health, use-mailbox
 ├── lib/
-│   ├── config.ts                     # Environment config
-│   ├── dmarc/
-│   │   ├── parser.ts                 # XML parser & analysis
-│   │   ├── attachments.ts            # .xml, .gz, .zip extraction
-│   │   └── sample.ts                 # Sample XML for testing
-│   ├── email/
-│   │   └── send-report.ts            # Email sender (disabled)
-│   └── webhook/
-│       └── verify.ts                 # Svix signature verification
-├── types/
-│   └── dmarc.ts                      # TypeScript types
-└── .env.example                      # Environment variables template
+│   ├── config.ts                     # Environment configuration
+│   ├── graph/                        # Microsoft Graph: auth, token store, mailbox listing
+│   ├── cache/report-cache.ts         # On-disk cache of parsed reports
+│   ├── state/store.ts                # Last sync / last review times
+│   ├── dashboard/                    # aggregate, readiness, changes, overview (pure logic)
+│   ├── dns/                          # records (DMARC/SPF/DKIM check), reverse (PTR)
+│   ├── dmarc/                        # parser, attachments, identity matching
+│   ├── format-date.ts                # DD.MM.YYYY formatting
+│   └── email/send-report.ts          # Email sender (disabled)
+├── emails/dmarc-report.tsx           # React Email digest template (preview only)
+├── proxy.ts                          # Local-only guard (rejects non-local requests)
+└── types/dmarc.ts                    # TypeScript types
+.env.example                          # Environment variables template
 ```
 
 ## Getting Started
@@ -93,6 +96,7 @@ Secrets are read only from environment variables (never hard-coded). Put them in
 | `DMARC_CACHE_TTL_HOURS` | Optional cache lifetime (default `2160`, i.e. 90 days) |
 | `DMARC_CACHE_MAX_ENTRIES` | Optional cache size cap (default `5000`) |
 | `DMARC_REPORT_ADDRESS` | Optional address that receives the reports; the DNS check verifies `rua=` includes it |
+| `DMARC_STATE_DIR` | Optional folder for the last-sync and last-review times (default `.cache/state`) |
 | `DMARC_DNS_CACHE_DIR` | Optional folder for cached reverse-DNS lookups (default `.cache/dns`) |
 
 ## Microsoft Entra / Exchange Online setup
@@ -164,11 +168,35 @@ The sign-in refresh token is stored in plain text in `.cache/auth/token.json` (`
 | `Missing configuration: …` | A variable is missing from `.env.local`. Restart `pnpm dev` after editing it. |
 | 0 reports found | Attachment names must end in `.xml`, `.gz` or `.zip`, and only messages from the last 90 days (`DMARC_FETCH_DAYS`) are checked. |
 
-### Dashboard
+### Using the app
 
-Open **Dashboard** in the header to see all cached reports together. It reads only the local cache (no Graph call, no sign-in), so it works right after a restart. Each fetch reads the last 90 days of mail (`DMARC_FETCH_DAYS`), and the cache means only new reports are downloaded.
+The **dashboard** (the home page) is built for an occasional check-in by one admin:
 
-- **Filters** (one row, scoping everything below): date range (7/30/90 days or all time, relative to now) and domain.
+1. **Sync mailbox** at the top downloads new reports (manual; the app never syncs on its own). It shows when the data was last synced and warns if that is more than 7 days ago.
+2. **Since you last reviewed** lists what is new since you last pressed **Mark as reviewed**: new reports, a change in the pass rate, new or newly failing sending sources, and policy changes. New means *received* after the review, so late-delivered reports about older days count too. Pressing the button sets the new baseline (stored locally, see `DMARC_STATE_DIR`; deleting `.cache` resets it).
+3. **Domains** shows one card per domain with its published policy, a **readiness** status, the single recommended next step and the key numbers. Click a card for the **domain page**: the full readiness checklist, trend chart, live DNS check and every sending source.
+4. **Reports** (in the header) is the report-by-report viewer and the paste-XML analyzer.
+
+#### Policy readiness
+
+Each domain is assessed over the last 30 days. If that holds fewer than 100 messages (a small domain), the window widens to 60 and then 90 days; the window used is shown. The status answers "can I move to a stricter policy?":
+
+| Status | Meaning |
+|---|---|
+| Not enough data | Fewer than 14 report days or 100 messages even on the widest window. Keep syncing. |
+| Not ready | A check failed (for example too many messages failing both DKIM and SPF, or a missing DMARC record). |
+| Almost ready | Only warnings are left (for example `pct` below 100, a stale sync, or the policy not yet stable). |
+| Ready to tighten | All checks pass: the next step says to move to `p=quarantine` (start with `pct=25`) or to `p=reject`. |
+| Enforced | `p=reject` with a failure rate within the limit. |
+| Enforced, needs review | `p=reject`, but more messages fail both checks than the limit: legitimate mail may be rejected. |
+
+The thresholds are constants in `src/lib/dashboard/readiness.ts`: at most **2%** of messages failing both checks to move from `none` to `quarantine`; at most **0.5%** to move to `reject` (and to stay healthy there), with `quarantine` stable for at least **14 days**. Senders failing both checks are listed for review: only you can tell whether a failing sender is yours (fix its SPF or DKIM first) or a spoofer (which enforcement blocks).
+
+The readiness metric, **survives enforcement**, counts every message that passed at least one of DKIM or SPF, because that is what DMARC requires. The stricter **passed both** figure (both aligned checks passed) is shown separately; the two are labelled so they are not confused.
+
+#### Dashboard details
+
+- **Trends range:** date range (7/30/90 days or all time, relative to now) for the chart and totals.
 - **Metrics:** each message is counted as *passed both* (aligned DKIM and SPF passed), *passed one*, or *failed both*. The headline rate is *passed both / messages*, the same definition as the per-report card. Counts are weighted by each record's message count. Repeated reports are de-duplicated by reporter and report ID. Days are UTC days of the report's start time.
 - **Daily chart:** stacked columns of the three outcomes, with a table view and keyboard support (arrow keys read each day).
 - **Sending sources:** each source IP is shown with its reverse-DNS name, confirmed by a forward lookup. Sources are marked *Healthy* (at least 95% passed both), *Failing* (at least 50% failed both), otherwise *Mixed*. A failing source with at least 10 messages and no confirmed reverse DNS is flagged *Suspicious*.

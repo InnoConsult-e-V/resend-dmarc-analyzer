@@ -10,10 +10,11 @@ const RANGES: Array<{ value: Range; label: string }> = [
 ];
 
 interface FiltersProps {
-  domains: string[];
-  domain: string;
+  /** Omit domains/domain/onDomain to show only the date range. */
+  domains?: string[];
+  domain?: string;
   range: Range;
-  onDomain: (domain: string) => void;
+  onDomain?: (domain: string) => void;
   onRange: (range: Range) => void;
 }
 
@@ -48,21 +49,23 @@ export function Filters({
           </button>
         ))}
       </div>
-      <label className="flex items-center gap-2 text-sm text-gray-6">
-        Domain
-        <select
-          value={domain}
-          onChange={(e) => onDomain(e.target.value)}
-          className="rounded-lg border border-gray-3 bg-gray-2 px-3 py-1.5 text-sm text-gray-9 focus:border-gray-5 focus:outline-none"
-        >
-          <option value="">All domains</option>
-          {domains.map((d) => (
-            <option key={d} value={d}>
-              {d}
-            </option>
-          ))}
-        </select>
-      </label>
+      {onDomain && domains && (
+        <label className="flex items-center gap-2 text-sm text-gray-6">
+          Domain
+          <select
+            value={domain ?? ''}
+            onChange={(e) => onDomain(e.target.value)}
+            className="rounded-lg border border-gray-3 bg-gray-2 px-3 py-1.5 text-sm text-gray-9 focus:border-gray-5 focus:outline-none"
+          >
+            <option value="">All domains</option>
+            {domains.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
     </div>
   );
 }

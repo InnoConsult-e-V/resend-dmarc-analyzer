@@ -5,8 +5,16 @@ import { usePathname } from 'next/navigation';
 import { type HealthState, StatusPill } from '@/components/status-pill';
 
 const NAV = [
-  { href: '/', label: 'Reports' },
-  { href: '/dashboard', label: 'Dashboard' },
+  {
+    href: '/',
+    label: 'Dashboard',
+    match: (path: string) => path === '/' || path.startsWith('/domains'),
+  },
+  {
+    href: '/reports',
+    label: 'Reports',
+    match: (path: string) => path.startsWith('/reports'),
+  },
 ];
 
 interface AppHeaderProps {
@@ -43,8 +51,8 @@ export function AppHeader({ health, onRecheck }: AppHeaderProps) {
             </h1>
           </div>
           <nav aria-label="Main" className="flex items-center gap-1">
-            {NAV.map(({ href, label }) => {
-              const active = pathname === href;
+            {NAV.map(({ href, label, match }) => {
+              const active = match(pathname ?? '');
               return (
                 <Link
                   key={href}

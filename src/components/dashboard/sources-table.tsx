@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import type { SourceStats } from '@/lib/dashboard/aggregate';
 import { OutcomeLegend, passRate, SegmentedBar } from './outcomes';
 import { SendsAs } from './sends-as';
@@ -13,7 +13,7 @@ interface PtrInfo {
   org: string | null;
 }
 
-const SHOWN = 50;
+const DEFAULT_LIMIT = 50;
 /** A failing source needs at least this many messages to be flagged. */
 const SUSPICIOUS_MIN_MESSAGES = 10;
 
@@ -32,8 +32,25 @@ function chipFor(
   return { tone: 'bad', label: suspicious ? 'Suspicious' : 'Failing' };
 }
 
-export function SourcesTable({ sources }: { sources: SourceStats[] }) {
-  const [failingOnly, setFailingOnly] = useState(false);
+interface SourcesTableProps {
+  sources: SourceStats[];
+  /** Rows shown (default 50). */
+  limit?: number;
+  /** Start with only failing sources shown. */
+  failingOnlyDefault?: boolean;
+  title?: string;
+  /** Extra footer content, e.g. a link to the full list. */
+  footer?: ReactNode;
+}
+
+export function SourcesTable({
+  sources,
+  limit = DEFAULT_LIMIT,
+  failingOnlyDefault = false,
+  title = 'Sending sources',
+  footer,
+}: SourcesTableProps) {
+  const [failingOnly, setFailingOnly] = useState(failingOnlyDefault);
   const [ptrs, setPtrs] = useState<Record<string, PtrInfo>>({});
   const [ptrNote, setPtrNote] = useState<string | null>(null);
 
@@ -42,7 +59,7 @@ export function SourcesTable({ sources }: { sources: SourceStats[] }) {
       (failingOnly
         ? sources.filter((s) => s.status === 'failing')
         : sources
-      ).slice(0, SHOWN),
+      ).slice(0, limit),
     [sources, failingOnly],
   );
 
@@ -87,9 +104,7 @@ export function SourcesTable({ sources }: { sources: SourceStats[] }) {
     <section className="rounded-xl border border-gray-3 bg-gray-2">
       <div className="flex flex-wrap items-center justify-between gap-3 p-5 pb-3">
         <div>
-          <h2 className="text-base font-medium text-gray-10">
-            Sending sources
-          </h2>
+          <h2 className="text-base font-medium text-gray-10">{title}</h2>
           <p className="text-sm text-gray-6">
             Worst first. Names come from reverse DNS, confirmed by a forward
             lookup.
@@ -168,10 +183,15 @@ export function SourcesTable({ sources }: { sources: SourceStats[] }) {
           </tbody>
         </table>
       </div>
-      {sources.length > SHOWN && (
+      {(sources.length > limit || footer) && (
         <p className="border-t border-gray-3 px-5 py-3 text-xs text-gray-6">
-          Showing the first {SHOWN} of {sources.length.toLocaleString()}{' '}
-          sources.
+          {sources.length > limit && (
+            <>
+              Showing the first {limit} of {sources.length.toLocaleString()}{' '}
+              sources.{' '}
+            </>
+          )}
+          {footer}
         </p>
       )}
     </section>

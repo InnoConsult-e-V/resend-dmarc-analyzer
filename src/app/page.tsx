@@ -2,371 +2,235 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { AppHeader } from '@/components/app-header';
-import { ReportViewer } from '@/components/dmarc';
+import { ChangesCard } from '@/components/dashboard/changes-card';
+import { DomainCard } from '@/components/dashboard/domain-card';
+import { Filters, type Range } from '@/components/dashboard/filters';
+import { passRate } from '@/components/dashboard/outcomes';
+import { SourcesTable } from '@/components/dashboard/sources-table';
+import { StackedDailyChart } from '@/components/dashboard/stacked-daily-chart';
+import { SummaryCard } from '@/components/dmarc/summary-card';
+import { MailboxControls } from '@/components/mailbox-controls';
 import { StatusBanner } from '@/components/status-banner';
 import { useHealth } from '@/hooks/use-health';
-import { parseAndAnalyze } from '@/lib/dmarc/parser';
-import { reviveAnalysis } from '@/lib/dmarc/revive';
-import { formatDateTime } from '@/lib/format-date';
-import type { DMARCAnalysis } from '@/types/dmarc';
+import { useMailbox } from '@/hooks/use-mailbox';
+import type { DashboardData } from '@/lib/dashboard/aggregate';
+import type { Overview } from '@/lib/dashboard/overview';
 
-interface FetchedReport {
-  analysis: DMARCAnalysis;
-  subject: string;
-  receivedDateTime: string;
-}
+const RANGE_LABEL: Record<Range, string> = {
+  '7': 'the last 7 days',
+  '30': 'the last 30 days',
+  '90': 'the last 90 days',
+  all: 'all time',
+};
 
-export default function Home() {
-  const [xml, setXml] = useState('');
-  const [analysis, setAnalysis] = useState<DMARCAnalysis | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isFetching, setIsFetching] = useState(false);
-  const [fetched, setFetched] = useState<FetchedReport[]>([]);
-  const [fetchNote, setFetchNote] = useState<string | null>(null);
-  const [auth, setAuth] = useState<{
-    checked: boolean;
-    signedIn: boolean;
-    account: string | null;
-  }>({ checked: false, signedIn: false, account: null });
-
+export default function DashboardPage() {
   const { health, loadHealth } = useHealth();
+  const { auth, syncing, sync, signOut, authError, clearAuthError } =
+    useMailbox();
 
-  const loadCached = useCallback(async () => {
+  const [range, setRange] = useState<Range>('30');
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [reviewing, setReviewing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const res = await fetch('/api/reports/cached');
-      if (!res.ok) {
-        return;
-      }
-      const data = await res.json();
-      const reports = (data.reports as FetchedReport[]).map((r) => ({
-        ...r,
-        analysis: reviveAnalysis(r.analysis),
-      }));
-      if (reports.length > 0) {
-        // Don't overwrite a fetch that finished while this was loading.
-        setFetched((current) => (current.length > 0 ? current : reports));
-        setFetchNote(
-          `Loaded ${reports.length} report(s) from the local cache (last updated ${formatDateTime(data.lastCachedAt)}). Fetch from mailbox to check for new ones.`,
-        );
-      }
-    } catch {
-      // The cache is optional; ignore failures.
-    }
-  }, []);
-
-  const loadAuth = useCallback(async () => {
-    try {
-      const res = await fetch('/api/auth/status');
-      const data = await res.json();
-      setAuth({
-        checked: true,
-        signedIn: data.signedIn,
-        account: data.account,
-      });
-    } catch {
-      setAuth({ checked: true, signedIn: false, account: null });
-    }
-  }, []);
-
-  useEffect(() => {
-    loadAuth();
-    loadHealth();
-    loadCached();
-    const code = new URLSearchParams(window.location.search).get('auth_error');
-    if (code) {
-      const messages: Record<string, string> = {
-        denied: 'Sign-in was cancelled or denied.',
-        state: 'Sign-in could not be verified. Please try again.',
-        exchange: 'Sign-in failed. Please try again.',
-        config: 'Sign-in is not configured (check your environment variables).',
-      };
-      setError(messages[code] ?? 'Sign-in failed.');
-      window.history.replaceState({}, '', '/');
-    }
-  }, [loadAuth, loadHealth, loadCached]);
-
-  const handleSignOut = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    setFetched([]);
-    setFetchNote(null);
-    loadAuth();
-    loadHealth();
-  };
-
-  const handleAnalyze = () => {
-    if (!xml.trim()) {
-      setError('Please paste a DMARC report XML');
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const result = parseAndAnalyze(xml);
-      setAnalysis(result);
+      const [o, d] = await Promise.all([
+        fetch('/api/overview').then((r) => r.json()),
+        fetch(`/api/dashboard?days=${range}`).then(async (r) => {
+          const body = await r.json();
+          if (!r.ok) {
+            throw new Error(body.error ?? 'Failed to load the dashboard');
+          }
+          return body;
+        }),
+      ]);
+      setOverview(o);
+      setData(d);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : 'Failed to parse DMARC report',
+        err instanceof Error ? err.message : 'Failed to load the dashboard',
       );
-      setAnalysis(null);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
-  };
+  }, [range]);
 
-  const handleFetch = async (refresh = false) => {
-    setIsFetching(true);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useEffect(() => {
+    loadHealth();
+  }, [loadHealth]);
+
+  // A failed Microsoft sign-in comes back as ?auth_error=...
+  useEffect(() => {
+    if (authError) {
+      setError(authError);
+      clearAuthError();
+    }
+  }, [authError, clearAuthError]);
+
+  async function handleSync(refresh: boolean) {
     setError(null);
-    setFetchNote(null);
+    setNote(null);
+    const result = await sync({ refresh, slim: true });
+    if (result.ok) {
+      const { data: r } = result;
+      const errs: string[] = r.errors ?? [];
+      setNote(
+        `Synced: ${r.reportCount} report(s) from ${r.messages} message(s) (${r.cached} already cached, ${r.fetched} new)` +
+          (errs.length ? `. Errors: ${errs.join('; ')}` : '.'),
+      );
+      await load();
+    } else {
+      setError(result.error);
+    }
+    loadHealth();
+  }
+
+  async function handleReview() {
+    setReviewing(true);
     try {
-      const res = await fetch(
-        `/api/reports/fetch${refresh ? '?refresh=1' : ''}`,
-        { method: 'POST' },
-      );
-      const data = await res.json();
-      if (res.status === 401 && data.signInRequired) {
-        setAuth({ checked: true, signedIn: false, account: null });
-        throw new Error('Please sign in to read the mailbox.');
-      }
+      const res = await fetch('/api/review', { method: 'POST' });
       if (!res.ok) {
-        throw new Error(data.error ?? 'Failed to fetch reports');
+        throw new Error('Could not save the review time');
       }
-      setFetched(
-        (data.reports as FetchedReport[]).map((r) => ({
-          ...r,
-          analysis: reviveAnalysis(r.analysis),
-        })),
-      );
-      const errs: string[] = data.errors ?? [];
-      setFetchNote(
-        `${data.reports.length} report(s) from ${data.messages} message(s) (${data.cached} cached, ${data.fetched} new)` +
-          (errs.length ? `. Errors: ${errs.join('; ')}` : ''),
-      );
+      await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch reports');
+      setError(
+        err instanceof Error ? err.message : 'Could not save the review time',
+      );
     } finally {
-      setIsFetching(false);
-      loadHealth();
+      setReviewing(false);
     }
-  };
+  }
 
-  const handleClear = () => {
-    setXml('');
-    setAnalysis(null);
-    setError(null);
-  };
+  const t = data?.totals;
+  const rate = t ? passRate(t) : 0;
+  const empty = overview !== null && overview.domains.length === 0;
 
   return (
     <div className="min-h-screen bg-background">
       <AppHeader health={health} onRecheck={loadHealth} />
-
       <StatusBanner
         error={error}
-        note={fetchNote}
+        note={note}
         onDismissError={() => setError(null)}
-        onDismissNote={() => setFetchNote(null)}
+        onDismissNote={() => setNote(null)}
       />
 
-      <main className="max-w-6xl mx-auto px-4 py-8">
-        {!analysis ? (
-          <div className="space-y-6">
-            {/* Hero */}
-            <div className="text-center py-8">
-              <h2 className="text-3xl font-semibold text-gray-10 mb-3">
-                Analyze DMARC reports
-              </h2>
-              <p className="text-gray-6 max-w-lg mx-auto">
-                Paste your DMARC aggregate report (RUA) XML below to get a
-                detailed breakdown of your email authentication results.
-              </p>
-            </div>
+      <main className="mx-auto max-w-6xl space-y-6 px-4 py-8">
+        <MailboxControls
+          auth={auth}
+          syncing={syncing}
+          onSync={handleSync}
+          onSignOut={async () => {
+            await signOut();
+            loadHealth();
+          }}
+          lastSyncAt={overview ? overview.sync.lastSyncAt : undefined}
+        />
 
-            {/* Mailbox */}
-            <div className="border border-gray-3 rounded-xl p-6 space-y-4">
-              <h3 className="text-lg font-medium text-gray-10">
-                Exchange mailbox
-              </h3>
-              {!auth.checked ? null : auth.signedIn ? (
-                <div className="flex flex-col md:flex-row md:items-center gap-3">
-                  <button
-                    onClick={() => handleFetch()}
-                    disabled={isFetching}
-                    className="bg-gray-10 text-gray-1 font-medium py-3 px-6 rounded-xl hover:bg-gray-9 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {isFetching ? 'Fetching...' : 'Fetch from mailbox'}
-                  </button>
-                  <button
-                    onClick={() => handleFetch(true)}
-                    disabled={isFetching}
-                    className="border border-gray-3 text-gray-9 font-medium py-3 px-6 rounded-xl hover:bg-gray-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    Force refresh
-                  </button>
-                  <span className="text-sm text-gray-6 md:ml-auto">
-                    Signed in as {auth.account}{' '}
-                    <button
-                      onClick={handleSignOut}
-                      className="underline underline-offset-2 hover:text-gray-9"
-                    >
-                      Sign out
-                    </button>
-                  </span>
-                </div>
-              ) : (
-                <a
-                  href="/api/auth/login"
-                  className="inline-block bg-gray-10 text-gray-1 font-medium py-3 px-6 rounded-xl hover:bg-gray-9 transition-colors"
-                >
-                  Sign in with Microsoft
-                </a>
-              )}
-              {fetched.length > 0 && (
-                <ul className="divide-y divide-gray-3 border border-gray-3 rounded-xl">
-                  {fetched.map((r, i) => (
-                    <li
-                      key={`${r.analysis.report.report_metadata.report_id}-${i}`}
-                    >
-                      <button
-                        onClick={() => setAnalysis(r.analysis)}
-                        className="w-full text-left px-4 py-3 text-sm text-gray-9 hover:bg-gray-2 transition-colors"
-                      >
-                        {r.analysis.report.report_metadata.org_name} —{' '}
-                        {r.analysis.report.policy_published.domain}
-                        <span className="text-gray-6">
-                          {' '}
-                          · {formatDateTime(r.receivedDateTime)}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            {/* Input Area */}
-            <div className="space-y-4">
-              <div className="relative">
-                <textarea
-                  value={xml}
-                  onChange={(e) => setXml(e.target.value)}
-                  placeholder="Paste your DMARC XML here..."
-                  className="w-full h-80 bg-gray-2 border border-gray-3 rounded-xl p-4 font-mono text-sm text-gray-9 placeholder-gray-5 focus:outline-none focus:border-gray-5 resize-none"
-                />
-                {xml && (
-                  <button
-                    onClick={handleClear}
-                    className="absolute top-3 right-3 text-gray-5 hover:text-gray-7 transition-colors"
-                    aria-label="Clear input"
-                  >
-                    <svg
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  </button>
-                )}
-              </div>
-
-              <button
-                onClick={handleAnalyze}
-                disabled={isLoading || !xml.trim()}
-                className="w-full bg-gray-10 text-gray-1 font-medium py-3 px-6 rounded-xl hover:bg-gray-9 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isLoading ? 'Analyzing...' : 'Analyze report'}
-              </button>
-            </div>
-
-            {/* Info */}
-            <div className="border border-gray-3 rounded-xl p-6 mt-8">
-              <h3 className="text-lg font-medium text-gray-10 mb-4">
-                What is DMARC?
-              </h3>
-              <p className="text-sm text-gray-7 leading-relaxed">
-                DMARC (Domain-based Message Authentication, Reporting &
-                Conformance) is an email authentication protocol that protects
-                your domain from being used for email spoofing. DMARC aggregate
-                reports (RUA) are sent by email receivers to help you understand
-                how your domain&apos;s email is being authenticated.
-              </p>
-            </div>
+        {empty ? (
+          <div className="rounded-xl border border-gray-3 bg-gray-2 p-10 text-center">
+            <p className="text-gray-9">No reports in the local cache yet.</p>
+            <p className="mt-1 text-sm text-gray-6">
+              Sign in and use <strong>Sync mailbox</strong> to load your DMARC
+              reports.
+            </p>
           </div>
         ) : (
-          <div className="space-y-6">
-            {/* Back button */}
-            <button
-              onClick={handleClear}
-              className="flex items-center gap-2 text-sm text-gray-6 hover:text-gray-9 transition-colors cursor-pointer"
+          overview &&
+          data &&
+          t && (
+            // Hold the previous render (dimmed) while refetching: no layout jump.
+            <div
+              className={`space-y-6 transition-opacity ${loading ? 'opacity-60' : ''}`}
+              aria-busy={loading}
             >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <polyline points="15 18 9 12 15 6" />
-              </svg>
-              Analyze another report
-            </button>
+              <ChangesCard
+                changes={overview.changes}
+                reviewing={reviewing}
+                onReview={handleReview}
+              />
 
-            {/* Report Viewer */}
-            <ReportViewer analysis={analysis} />
-          </div>
+              <section aria-label="Domains" className="space-y-3">
+                <h2 className="text-base font-medium text-gray-10">Domains</h2>
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {overview.domains.map((d) => (
+                    <DomainCard key={d.domain} domain={d} />
+                  ))}
+                </div>
+              </section>
+
+              <section aria-label="Trends" className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h2 className="text-base font-medium text-gray-10">Trends</h2>
+                  <Filters range={range} onRange={setRange} />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  <SummaryCard
+                    title="Reports"
+                    value={data.reports.toLocaleString()}
+                    subtitle={
+                      data.duplicatesSkipped > 0
+                        ? `${data.duplicatesSkipped} duplicate(s) skipped`
+                        : `${data.reporters.length} reporter(s)`
+                    }
+                  />
+                  <SummaryCard
+                    title="Messages"
+                    value={t.messages.toLocaleString()}
+                    subtitle={`${data.sources.length.toLocaleString()} sending source(s)`}
+                  />
+                  <SummaryCard
+                    title="Passed both (DKIM + SPF)"
+                    value={t.messages > 0 ? `${rate.toFixed(1)}%` : '-'}
+                    subtitle={`${t.passedBoth.toLocaleString()} of ${t.messages.toLocaleString()}`}
+                    variant={
+                      t.messages === 0
+                        ? 'default'
+                        : rate >= 95
+                          ? 'success'
+                          : rate >= 80
+                            ? 'warning'
+                            : 'danger'
+                    }
+                  />
+                  <SummaryCard
+                    title="Quarantined / rejected"
+                    value={`${t.quarantined.toLocaleString()} / ${t.rejected.toLocaleString()}`}
+                    subtitle={`${t.failedBoth.toLocaleString()} failed both`}
+                  />
+                </div>
+
+                <StackedDailyChart
+                  daily={data.daily}
+                  title="Daily messages by authentication result"
+                  subtitle={`All domains, ${RANGE_LABEL[range]} · UTC days`}
+                />
+              </section>
+
+              {data.sources.length > 0 && (
+                <SourcesTable
+                  sources={data.sources}
+                  limit={5}
+                  failingOnlyDefault
+                  title="Top failing sources"
+                  footer="Open a domain above for its full list of sources and DNS checks."
+                />
+              )}
+            </div>
+          )
         )}
       </main>
-
-      {/* Footer */}
-      <footer className="border-t border-gray-3 mt-16">
-        <div className="max-w-6xl mx-auto px-4 py-6 flex flex-col md:flex-row md:items-center justify-between gap-4 text-sm text-gray-6">
-          <a
-            href="https://github.com/resend/resend-dmarc-analyzer"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:text-gray-9 transition-colors"
-          >
-            DMARC Analyzer
-          </a>
-          <div className="flex flex-wrap items-center gap-4">
-            <a
-              href="https://resend.com/blog/how-to-read-a-dmarc-report"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-gray-9 transition-colors"
-            >
-              How to read a DMARC report
-            </a>
-            <a
-              href="https://resend.com/blog/dmarc-policy-modes"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-gray-9 transition-colors"
-            >
-              DMARC policy modes
-            </a>
-            <a
-              href="https://resend.com/blog/how-dmarc-applies-to-subdomains"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-gray-9 transition-colors"
-            >
-              DMARC and subdomains
-            </a>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }

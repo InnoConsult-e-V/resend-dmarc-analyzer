@@ -80,6 +80,11 @@ export function getFetchDays(): number {
   return positiveNumber('DMARC_FETCH_DAYS', 90);
 }
 
+/** Folder for the small local state file (last sync / last review). */
+export function getStateDir(): string {
+  return process.env.DMARC_STATE_DIR || '.cache/state';
+}
+
 /** Folder for the cached reverse-DNS (PTR) lookups. */
 export function getDnsCacheDir(): string {
   return process.env.DMARC_DNS_CACHE_DIR || '.cache/dns';
