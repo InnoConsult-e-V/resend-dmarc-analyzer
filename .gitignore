@@ -30,9 +30,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env
-.env.local
+# env files: ignore everything except the placeholder template
+.env*
+!.env.example
 
 # vercel
 .vercel
@@ -44,3 +44,9 @@ next-env.d.ts
 # AI
 .claude
 .agents
+
+# rendered email preview
+test-email.html
+
+# local report cache
+/.cache/

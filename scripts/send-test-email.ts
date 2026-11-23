@@ -1,15 +1,14 @@
 /**
- * Test script to send a DMARC report email with sample data
+ * Render the DMARC digest email with sample data to an HTML file.
+ * Email sending is disabled, so this is for previewing the template.
  *
  * Usage:
- *   pnpm test:email <recipient-email>
- *
- * Requires RESEND_API_KEY and DMARC_SENDING_DOMAIN env vars
+ *   pnpm test:email [output-file]
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { config } from 'dotenv';
-import { Resend } from 'resend';
+import { render } from 'react-email';
 import { DMARCReportEmail } from '../src/emails/dmarc-report';
 import type { DMARCAnalysis } from '../src/types/dmarc';
 
@@ -219,51 +218,12 @@ const sampleAnalysis: DMARCAnalysis = {
 };
 
 async function main() {
-  const recipient = process.argv[2] || process.env.DMARC_RECIPIENT_EMAIL;
-
-  if (!recipient) {
-    console.error(
-      'Usage: pnpm test:email <recipient-email>\n       Or set DMARC_RECIPIENT_EMAIL in .env',
-    );
-    process.exit(1);
-  }
-
-  const apiKey = process.env.RESEND_API_KEY;
-  const sendingDomain = process.env.DMARC_SENDING_DOMAIN;
-
-  if (!apiKey) {
-    console.error('Error: RESEND_API_KEY environment variable is required');
-    process.exit(1);
-  }
-
-  if (!sendingDomain) {
-    console.error(
-      'Error: DMARC_SENDING_DOMAIN environment variable is required',
-    );
-    process.exit(1);
-  }
-
-  const resend = new Resend(apiKey);
-  const from = `dmarc@${sendingDomain}`;
-
-  console.log(`Sending test DMARC report email...`);
-  console.log(`  From: ${from}`);
-  console.log(`  To: ${recipient}`);
-
-  const { data, error } = await resend.emails.send({
-    from,
-    to: recipient,
-    subject: `[TEST] DMARC Report: ${sampleAnalysis.report.report_metadata.org_name} - 96.3% pass rate`,
-    react: DMARCReportEmail({ analysis: sampleAnalysis }),
-  });
-
-  if (error) {
-    console.error('Failed to send email:', error);
-    process.exit(1);
-  }
-
-  console.log(`Email sent successfully!`);
-  console.log(`  Email ID: ${data?.id}`);
+  const outPath = process.argv[2] || 'test-email.html';
+  const html = await render(DMARCReportEmail({ analysis: sampleAnalysis }));
+  writeFileSync(outPath, html);
+  console.log(
+    `Rendered sample DMARC digest to ${outPath} (email sending is disabled)`,
+  );
 }
 
 main();

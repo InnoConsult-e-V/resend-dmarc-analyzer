@@ -39,9 +39,25 @@ export async function extractXMLFromAttachment(
 /**
  * Decompress gzip content
  */
-function decompressGzip(buffer: Buffer): string {
-  const decompressed = pako.inflate(buffer);
-  return new TextDecoder('utf-8').decode(decompressed);
+const MAX_DECOMPRESSED_BYTES = 50 * 1024 * 1024;
+
+function decompressGzip(buffer: Uint8Array): string {
+  // Stream the inflate so a decompression bomb is rejected early.
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const inflator = new pako.Inflate();
+  inflator.onData = (chunk: Uint8Array) => {
+    total += chunk.length;
+    if (total > MAX_DECOMPRESSED_BYTES) {
+      throw new Error('Decompressed attachment exceeds size limit');
+    }
+    chunks.push(chunk);
+  };
+  inflator.push(buffer, true);
+  if (inflator.err) {
+    throw new Error(`Invalid gzip data: ${inflator.msg}`);
+  }
+  return Buffer.concat(chunks).toString('utf-8');
 }
 
 /**
