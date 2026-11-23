@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { AppHeader } from '@/components/app-header';
+import { AttentionCard } from '@/components/dashboard/attention-card';
 import { ChangePlanCard } from '@/components/dashboard/change-plan-card';
 import { DnsHistory } from '@/components/dashboard/dns-history';
 import { DnsPanel, type DnsResult } from '@/components/dashboard/dns-panel';
@@ -16,6 +17,7 @@ import { SummaryCard } from '@/components/dmarc/summary-card';
 import { StatusBanner } from '@/components/status-banner';
 import { useHealth } from '@/hooks/use-health';
 import type { DashboardData } from '@/lib/dashboard/aggregate';
+import { dnsAttention, sortAttention } from '@/lib/dashboard/attention';
 import type { Overview } from '@/lib/dashboard/overview';
 import { planNextChange } from '@/lib/dashboard/planner';
 import { withDns } from '@/lib/dashboard/readiness';
@@ -111,6 +113,10 @@ export default function DomainPage() {
           readiness,
         )
       : null;
+  const attention =
+    entry && readiness
+      ? sortAttention([...entry.attention, ...dnsAttention(readiness)])
+      : [];
   const t = data?.totals;
   const rate = t ? passRate(t) : 0;
 
@@ -152,6 +158,8 @@ export default function DomainPage() {
               className={`space-y-6 transition-opacity ${loading ? 'opacity-60' : ''}`}
               aria-busy={loading}
             >
+              <AttentionCard items={attention} />
+
               <ReadinessCard readiness={readiness} dnsLoading={dnsLoading} />
 
               {plan && <ChangePlanCard plan={plan} />}
@@ -233,7 +241,7 @@ export default function DomainPage() {
               {dns && <DnsHistory history={dns.history ?? []} />}
 
               {data.sources.length > 0 && (
-                <SourcesTable sources={data.sources} />
+                <SourcesTable sources={data.sources} onDecisionChange={load} />
               )}
             </div>
           )

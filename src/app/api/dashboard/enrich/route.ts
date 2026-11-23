@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import { listCached } from '@/lib/cache/report-cache';
 import { collectSourceIps } from '@/lib/dashboard/aggregate';
 import { MAX_IPS_PER_REQUEST, reverseLookup } from '@/lib/dns/reverse';
+import { primaryKey } from '@/lib/senders/keys';
+import { identifyServices } from '@/lib/senders/resolve';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,10 +32,22 @@ export async function POST(request: Request) {
     );
   }
 
-  const known = collectSourceIps(await listCached());
+  const entries = await listCached();
+  const known = collectSourceIps(entries);
   if (!(ips as string[]).every((ip) => known.has(ip))) {
     return NextResponse.json({ error: 'Unknown IP address' }, { status: 400 });
   }
 
-  return NextResponse.json({ results: await reverseLookup(ips as string[]) });
+  const ptrs = await reverseLookup(ips as string[]);
+  const services = identifyServices(
+    entries,
+    Object.fromEntries(ptrs.map((p) => [p.ip, p.ptr])),
+    ips as string[],
+  );
+  return NextResponse.json({
+    results: ptrs.map((p) => {
+      const service = services[p.ip] ?? null;
+      return { ...p, service, key: primaryKey(p.ip, service) };
+    }),
+  });
 }

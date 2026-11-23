@@ -11,7 +11,8 @@
     "lint:fix": "biome check . --write",
     "format": "biome format --write",
     "email": "email dev --dir src/emails --port 3003",
-    "test:email": "tsx scripts/send-test-email.ts"
+    "test:email": "tsx scripts/send-test-email.ts",
+    "update:senders": "tsx scripts/update-sender-names.ts"
   },
   "dependencies": {
     "fast-xml-parser": "5.3.8",

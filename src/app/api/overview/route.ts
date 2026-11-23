@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { listCached } from '@/lib/cache/report-cache';
 import { buildOverview } from '@/lib/dashboard/overview';
 import { readHistory } from '@/lib/dns/history';
+import { buildReviewContext } from '@/lib/senders/resolve';
 import { readState } from '@/lib/state/store';
 
 export const dynamic = 'force-dynamic';
@@ -16,5 +17,8 @@ export async function GET() {
     readState(),
     readHistory(),
   ]);
-  return NextResponse.json(buildOverview(entries, state, Date.now(), history));
+  const review = await buildReviewContext(entries);
+  return NextResponse.json(
+    buildOverview(entries, state, Date.now(), history, review),
+  );
 }

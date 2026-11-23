@@ -65,7 +65,13 @@ export function describeChanges(d: DomainChange, multi: boolean): Line[] {
     lines.push({
       tone:
         s.status === 'failing' ? 'bad' : s.status === 'mixed' ? 'warn' : 'info',
-      text: `${who}New sending source ${s.ip} (${num(s.messages)} messages, ${s.status}).`,
+      text: `${who}New sending source ${s.service ? `${s.service} (${s.ip})` : s.ip}: ${num(s.messages)} messages, ${s.status}, ${
+        s.review === 'unreviewed'
+          ? 'not reviewed yet'
+          : s.review === 'approved'
+            ? 'approved'
+            : 'marked as not yours'
+      }.`,
     });
   }
   for (const c of d.dnsChanges.slice(0, 5)) {

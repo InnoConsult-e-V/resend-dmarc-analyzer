@@ -4,8 +4,10 @@ import {
   publishedOf,
 } from '@/lib/dmarc/policy';
 import type { DomainDnsReport, Finding } from '@/lib/dns/records';
+import type { SourceReview } from '@/lib/senders/keys';
 import type { DispositionType } from '@/types/dmarc';
 import { type AggregateEntry, aggregate, dedupeEntries } from './aggregate';
+import { type ReviewContext, reviewFor, serviceNameFor } from './review';
 
 /**
  * Policy readiness: is this domain ready for a stricter DMARC policy?
@@ -31,7 +33,11 @@ export const READINESS = {
   /** Max share to move quarantine -> reject (and to stay healthy at reject). */
   REJECT_MAX_FAIL: 0.005,
   STABLE_DAYS_FOR_REJECT: 14,
-  /** A failing source is worth a look at this many failed messages or share. */
+  /**
+   * A failing source needs review once it has at least this many failed
+   * messages AND at least this share of the domain's messages, so tiny
+   * domains are not flooded and busy ones are not drowned in noise.
+   */
   REVIEW_MIN_FAILED: 5,
   REVIEW_MIN_SHARE: 0.005,
   REVIEW_TOP: 5,
@@ -57,13 +63,18 @@ export interface ReadinessCheck {
 }
 
 export interface ReviewSource {
+  /** The first IP of the group (a service can send from several IPs) */
   ip: string;
+  ips: string[];
   messages: number;
   failedBoth: number;
   /** Share of the domain's messages, 0..1 */
   share: number;
   headerFrom: string[];
   externalIdentities: string[];
+  review: SourceReview;
+  /** Service the source was identified as, when known */
+  service: string | null;
 }
 
 export interface Readiness {
@@ -77,6 +88,8 @@ export interface Readiness {
     windowDays: number;
     messages: number;
     reportDays: number;
+    /** Messages from senders marked "not mine" that failed both checks (excluded from the failure-rate check). */
+    notMineFailed: number;
     /** 0..100, or null when there are no messages */
     survivesPct: number | null;
     passedBothPct: number | null;
@@ -120,9 +133,15 @@ function finalize(r: Omit<Readiness, 'status' | 'nextStep'>): Readiness {
     status = 'insufficient_data';
     nextStep = `Keep syncing: readiness needs at least ${READINESS.MIN_REPORT_DAYS} days of reports and ${READINESS.MIN_MESSAGES} messages (${metrics.reportDays} days and ${metrics.messages} messages so far).`;
   } else if (stage === 'reject') {
+    const approvedFailing = checks.find(
+      (c) => c.id === 'sources' && c.severity === 'error',
+    );
     if (failrate && failrate.severity !== 'ok') {
       status = 'monitoring';
       nextStep = `Enforced, but ${failrate.message} Legitimate mail may be rejected: review the failing senders.`;
+    } else if (approvedFailing) {
+      status = 'monitoring';
+      nextStep = `Enforced, but ${approvedFailing.message} Their mail is being rejected.`;
     } else {
       status = 'enforced';
       nextStep =
@@ -152,6 +171,7 @@ export function assessReadiness(
   entries: AggregateEntry[],
   domain: string,
   now: number = Date.now(),
+  review?: ReviewContext,
 ): Readiness {
   const { unique } = dedupeEntries(entries);
   const own = unique.filter(
@@ -239,6 +259,15 @@ export function assessReadiness(
           : `No new reports for ${daysSinceLastReport} days: sync the mailbox.`,
   });
 
+  // Senders the admin marked "not mine" are what enforcement should block:
+  // they do not count against readiness.
+  const notMineFailed = agg.sources
+    .filter((x) => reviewFor(review, x.ip) === 'not_mine')
+    .reduce((n, x) => n + x.failedBoth, 0);
+  const countedMessages = t.messages - notMineFailed;
+  const legitFailShare =
+    countedMessages > 0 ? (t.failedBoth - notMineFailed) / countedMessages : 0;
+
   // 3. Failure rate against the limit for the next step
   const limit =
     stage === 'none'
@@ -252,40 +281,104 @@ export function assessReadiness(
         : 'staying at p=reject';
   if (t.messages > 0) {
     const sev: CheckSeverity =
-      failShare <= limit ? 'ok' : failShare <= limit * 2 ? 'warn' : 'error';
+      legitFailShare <= limit
+        ? 'ok'
+        : legitFailShare <= limit * 2
+          ? 'warn'
+          : 'error';
     checks.push({
       id: 'failrate',
       severity: sev,
       title: 'Messages failing both checks',
-      message: `${pct(failShare)} of messages failed both DKIM and SPF (limit for ${goal}: ${pct(limit)}).`,
+      message: `${pct(legitFailShare)} of messages failed both DKIM and SPF (limit for ${goal}: ${pct(limit)})${
+        notMineFailed > 0
+          ? `, not counting ${notMineFailed.toLocaleString('en-US')} from senders you marked as not yours`
+          : ''
+      }.`,
     });
   }
 
-  // 4. Failing sources worth a look (advisory)
-  const sourcesToReview: ReviewSource[] = agg.sources
-    .filter(
-      (s) =>
-        s.failedBoth > 0 &&
-        (s.failedBoth >= READINESS.REVIEW_MIN_FAILED ||
-          s.failedBoth / t.messages >= READINESS.REVIEW_MIN_SHARE),
-    )
+  // 4. Failing senders: approved ones must be fixed, unreviewed ones reviewed.
+  // Sources identified as the same service are one sender, so a provider that
+  // sends from several IPs is judged (and listed) once.
+  const reviewThreshold = Math.max(
+    READINESS.REVIEW_MIN_FAILED,
+    READINESS.REVIEW_MIN_SHARE * t.messages,
+  );
+  const groups = new Map<
+    string,
+    {
+      name: string | null;
+      ips: string[];
+      messages: number;
+      failedBoth: number;
+      headerFrom: Set<string>;
+      external: Set<string>;
+      approved: boolean;
+    }
+  >();
+  for (const x of agg.sources) {
+    const rv = reviewFor(review, x.ip);
+    if (x.failedBoth === 0 || rv === 'not_mine') {
+      continue;
+    }
+    const name = serviceNameFor(review, x.ip);
+    const key = name ? `svc:${name}` : `ip:${x.ip}`;
+    const g = groups.get(key) ?? {
+      name,
+      ips: [],
+      messages: 0,
+      failedBoth: 0,
+      headerFrom: new Set<string>(),
+      external: new Set<string>(),
+      approved: false,
+    };
+    g.ips.push(x.ip);
+    g.messages += x.messages;
+    g.failedBoth += x.failedBoth;
+    for (const h of x.headerFrom) {
+      g.headerFrom.add(h);
+    }
+    for (const e of x.externalIdentities) {
+      g.external.add(e);
+    }
+    g.approved = g.approved || rv === 'approved';
+    groups.set(key, g);
+  }
+  const failing = [...groups.values()]
+    .filter((g) => g.failedBoth >= reviewThreshold)
+    .sort(
+      (a, b) =>
+        Number(b.approved) - Number(a.approved) || b.failedBoth - a.failedBoth,
+    );
+  const approvedFailing = failing.filter((g) => g.approved);
+  const sourcesToReview: ReviewSource[] = failing
     .slice(0, READINESS.REVIEW_TOP)
-    .map((s) => ({
-      ip: s.ip,
-      messages: s.messages,
-      failedBoth: s.failedBoth,
-      share: t.messages > 0 ? s.failedBoth / t.messages : 0,
-      headerFrom: s.headerFrom,
-      externalIdentities: s.externalIdentities,
+    .map((g) => ({
+      ip: g.ips[0],
+      ips: g.ips,
+      messages: g.messages,
+      failedBoth: g.failedBoth,
+      share: t.messages > 0 ? g.failedBoth / t.messages : 0,
+      headerFrom: [...g.headerFrom].sort(),
+      externalIdentities: [...g.external].sort(),
+      review: g.approved ? 'approved' : 'unreviewed',
+      service: g.name,
     }));
   checks.push({
     id: 'sources',
-    severity: sourcesToReview.length > 0 ? 'info' : 'ok',
+    severity:
+      approvedFailing.length > 0 ? 'error' : failing.length > 0 ? 'warn' : 'ok',
     title: 'Failing senders',
     message:
-      sourcesToReview.length > 0
-        ? `${sourcesToReview.length} sending source(s) fail both checks. If any are yours, fix their SPF or DKIM first; the rest are what enforcement would block.`
-        : 'No sending source fails both checks in a meaningful volume.',
+      approvedFailing.length > 0
+        ? `${approvedFailing.length} approved sender(s) fail both checks (${approvedFailing
+            .slice(0, 3)
+            .map((g) => g.name ?? g.ips[0])
+            .join(', ')}): fix their SPF or DKIM before enforcing.`
+        : failing.length > 0
+          ? `${failing.length} failing sender(s) need review: approve the ones that are yours (then fix them) and mark the rest as not yours.`
+          : 'No failing sender needs review.',
   });
 
   // 5. Policy stable long enough before reject
@@ -337,6 +430,7 @@ export function assessReadiness(
       windowDays,
       messages: t.messages,
       reportDays,
+      notMineFailed,
       survivesPct: t.messages > 0 ? (1 - failShare) * 100 : null,
       passedBothPct: t.messages > 0 ? (t.passedBoth / t.messages) * 100 : null,
       failedBothPct: t.messages > 0 ? failShare * 100 : null,

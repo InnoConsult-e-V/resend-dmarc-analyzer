@@ -1,4 +1,5 @@
 import { formatPolicy, publishedOf } from '@/lib/dmarc/policy';
+import type { SourceReview } from '@/lib/senders/keys';
 import {
   type AggregateEntry,
   aggregate,
@@ -6,6 +7,7 @@ import {
   type SourceStatus,
 } from './aggregate';
 import { assessReadiness, type ReadinessStatus } from './readiness';
+import { type ReviewContext, reviewFor, serviceNameFor } from './review';
 
 /**
  * What changed since the admin last marked the dashboard as reviewed. Reports
@@ -23,6 +25,9 @@ export interface NewSource {
   ip: string;
   messages: number;
   status: SourceStatus;
+  /** Service the source was identified as, if known */
+  service: string | null;
+  review: SourceReview;
 }
 
 export interface WorsenedSource {
@@ -91,6 +96,7 @@ export function computeChanges(
   reviewedAt: string | null,
   now: number = Date.now(),
   dnsEvents: DnsEvent[] = [],
+  review?: ReviewContext,
 ): Changes {
   if (!reviewedAt || Number.isNaN(Date.parse(reviewedAt))) {
     return {
@@ -140,7 +146,13 @@ export function computeChanges(
     );
     const newSources: NewSource[] = aggAll.sources
       .filter((s) => Date.parse(s.firstReceivedAt) > reviewedMs)
-      .map((s) => ({ ip: s.ip, messages: s.messages, status: s.status }));
+      .map((s) => ({
+        ip: s.ip,
+        messages: s.messages,
+        status: s.status,
+        service: serviceNameFor(review, s.ip),
+        review: reviewFor(review, s.ip),
+      }));
 
     const worsenedSources: WorsenedSource[] = aggAfter.sources
       .filter(
@@ -166,8 +178,8 @@ export function computeChanges(
 
     let readinessChange: DomainChange['readinessChange'] = null;
     if (before.length > 0 && after.length > 0) {
-      const was = assessReadiness(before, domain, reviewedMs).status;
-      const is = assessReadiness(own, domain, now).status;
+      const was = assessReadiness(before, domain, reviewedMs, review).status;
+      const is = assessReadiness(own, domain, now, review).status;
       if (was !== is) {
         readinessChange = { from: was, to: is };
       }

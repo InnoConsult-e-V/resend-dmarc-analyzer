@@ -103,6 +103,23 @@ async function writeCache(
   }
 }
 
+/** Reverse-DNS results that are already cached (fresh), without any network lookup. */
+export async function cachedPtrs(
+  ips: string[],
+  now: number = Date.now(),
+): Promise<Record<string, PtrInfo>> {
+  const file = path.resolve(process.cwd(), getDnsCacheDir(), 'ptr.json');
+  const cache = await readCache(file);
+  const out: Record<string, PtrInfo> = {};
+  for (const ip of ips) {
+    const hit = cache[ip];
+    if (hit && now - hit.at < TTL_MS) {
+      out[ip] = { ip, ptr: hit.ptr, verified: hit.verified, org: hit.org };
+    }
+  }
+  return out;
+}
+
 export async function reverseLookup(
   ips: string[],
   resolver: PtrResolverLike = defaultResolver(),

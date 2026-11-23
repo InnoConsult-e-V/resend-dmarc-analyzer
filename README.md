@@ -40,11 +40,14 @@ src/
 │   ├── dashboard/                    # aggregate, readiness, changes, overview, planner (pure logic)
 │   ├── dns/                          # records (DMARC/SPF/DKIM check), spf (lookup counter), history, reverse (PTR)
 │   ├── data/store.ts                 # JSON store for your own data (.data/)
+│   ├── senders/                      # name map lookup, keys, decisions (approved / not mine)
 │   ├── dmarc/                        # parser, attachments, identity matching
 │   ├── format-date.ts                # DD.MM.YYYY formatting
 │   └── email/send-report.ts          # Email sender (disabled)
 ├── emails/dmarc-report.tsx           # React Email digest template (preview only)
 ├── proxy.ts                          # Local-only guard (rejects non-local requests)
+data/sender-names/                    # Vendored sender-name map (CC BY-SA 4.0) + NOTICE
+scripts/update-sender-names.ts        # `pnpm update:senders`
 └── types/dmarc.ts                    # TypeScript types
 .env.example                          # Environment variables template
 ```
@@ -97,7 +100,7 @@ Secrets are read only from environment variables (never hard-coded). Put them in
 | `DMARC_CACHE_TTL_HOURS` | Optional cache lifetime (default `2160`, i.e. 90 days) |
 | `DMARC_CACHE_MAX_ENTRIES` | Optional cache size cap (default `5000`) |
 | `DMARC_REPORT_ADDRESS` | Optional address that receives the reports; the DNS check verifies `rua=` includes it |
-| `DMARC_DATA_DIR` | Optional folder for your own data such as the DNS history (default `.data`, git-ignored) |
+| `DMARC_DATA_DIR` | Optional folder for your own data: DNS history and approved/not-mine senders (default `.data`, git-ignored) |
 | `DMARC_STATE_DIR` | Optional folder for the last-sync and last-review times (default `.cache/state`) |
 | `DMARC_DNS_CACHE_DIR` | Optional folder for cached reverse-DNS lookups (default `.cache/dns`) |
 
@@ -195,6 +198,14 @@ Each domain is assessed over the last 30 days. If that holds fewer than 100 mess
 The thresholds are constants in `src/lib/dashboard/readiness.ts`: at most **2%** of messages failing both checks to move from `none` to `quarantine`; at most **0.5%** to move to `reject` (and to stay healthy there), with `quarantine` stable for at least **14 days**. Senders failing both checks are listed for review: only you can tell whether a failing sender is yours (fix its SPF or DKIM first) or a spoofer (which enforcement blocks).
 
 The readiness metric, **survives enforcement**, counts every message that passed at least one of DKIM or SPF, because that is what DMARC requires. The stricter **passed both** figure (both aligned checks passed) is shown separately; the two are labelled so they are not confused.
+
+#### Sender names, approvals and "Needs attention"
+
+- **Names:** each sending source is labelled with the service behind it, such as "Intuit Mailchimp (Marketing)" or "Outlook (Personal and Microsoft 365)". The app looks at the DKIM signing domains, then the SPF and envelope-from domains, then the reverse-DNS name, and matches them against a vendored copy of [parsedmarc's base reverse DNS map](https://github.com/domainaware/parsedmarc/tree/master/parsedmarc/resources/maps) (about 38,000 entries, in `data/sender-names/`). Your own domain is never treated as a service. Names are best effort and shown as "identified as"; they never approve anything by themselves. The lookup is entirely local; nothing is sent anywhere.
+- **Licence:** that data file is **CC BY-SA 4.0** (attribution to the parsedmarc project and IPinfo), unlike the rest of the code. See `data/sender-names/NOTICE.md`. Refresh it occasionally with `pnpm update:senders`: it downloads one fixed file, validates it strictly, and leaves the existing files untouched if anything looks wrong.
+- **Decide once per sender:** in the sources table, **Approve** a sender that is yours or mark it **Not mine** (what enforcement should block). One decision covers every IP of a service, so a provider that sends from many servers is one decision, not many. **Clear** undoes it. A bulk button marks all failing, unreviewed sources shown as not mine. Decisions are stored in `.data/senders.json`.
+- **Effect on readiness:** senders marked *not mine* do not count against the failure-rate check. An *approved* sender that fails DKIM and SPF is an error ("fix its SPF or DKIM before enforcing"). A failing sender nobody has reviewed is a warning, so the status stays at "Almost ready" until you decide. A source needs review once it has at least 5 failed messages **and** at least 0.5% of the domain's mail (counted per service), so tiny domains are not flooded and busy ones are not drowned in noise.
+- **Needs attention** (top of the domain page, and a badge on the dashboard card): approved-but-failing senders, unreviewed failing senders, new unreviewed senders since your last review, and DNS problems, in that order of urgency.
 
 #### Policy change planner
 
