@@ -37,7 +37,7 @@ src/
 │   ├── graph/                        # Microsoft Graph: auth, token store, mailbox listing
 │   ├── cache/report-cache.ts         # On-disk cache of parsed reports
 │   ├── state/store.ts                # Last sync / last review times
-│   ├── dashboard/                    # aggregate, readiness, changes, overview (pure logic)
+│   ├── dashboard/                    # aggregate, readiness, changes, overview, planner (pure logic)
 │   ├── dns/                          # records (DMARC/SPF/DKIM check), spf (lookup counter), history, reverse (PTR)
 │   ├── data/store.ts                 # JSON store for your own data (.data/)
 │   ├── dmarc/                        # parser, attachments, identity matching
@@ -195,6 +195,19 @@ Each domain is assessed over the last 30 days. If that holds fewer than 100 mess
 The thresholds are constants in `src/lib/dashboard/readiness.ts`: at most **2%** of messages failing both checks to move from `none` to `quarantine`; at most **0.5%** to move to `reject` (and to stay healthy there), with `quarantine` stable for at least **14 days**. Senders failing both checks are listed for review: only you can tell whether a failing sender is yours (fix its SPF or DKIM first) or a spoofer (which enforcement blocks).
 
 The readiness metric, **survives enforcement**, counts every message that passed at least one of DKIM or SPF, because that is what DMARC requires. The stricter **passed both** figure (both aligned checks passed) is shown separately; the two are labelled so they are not confused.
+
+#### Policy change planner
+
+When a domain is ready to tighten its policy, the domain page shows **Next change to publish**: the exact TXT record for `_dmarc.<your domain>`, built from your *live* record, with the changed tags highlighted and a copy button. Only `p`, `pct`, `t` and `np` are ever changed; every other tag (`rua`, `ruf`, `adkim`, `aspf`, `fo`, `sp`, ...) and the tag order are kept.
+
+- **`p=none` to `p=quarantine`, and `quarantine` to `reject`:** two steps. First `p=<next>; pct=25; t=y` (partial enforcement for older receivers, test mode for DMARCbis receivers, which have no partial enforcement), then, after a clean week or two, the same record without `pct` and `t`.
+- **A legacy ramp in progress** (`pct` below 100): raise `pct` to 50, then drop it.
+- **Test mode** (`t=y`) with the checks passing: remove `t` (and `pct`) to enforce.
+- **Fully enforced:** optionally add `np=reject` for subdomains that do not exist.
+- **No DMARC record:** a monitoring-only starter record with a placeholder report address.
+- **Not ready** (not enough data, failing senders, DNS problems): no record is proposed, only the reason.
+
+After you publish a step, press **Check again**: the change appears in the DNS history, and the next reports show its effect.
 
 #### DMARCbis (the 2026 revision of DMARC)
 

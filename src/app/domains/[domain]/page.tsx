@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { AppHeader } from '@/components/app-header';
+import { ChangePlanCard } from '@/components/dashboard/change-plan-card';
 import { DnsHistory } from '@/components/dashboard/dns-history';
 import { DnsPanel, type DnsResult } from '@/components/dashboard/dns-panel';
 import { Filters, type Range } from '@/components/dashboard/filters';
@@ -16,6 +17,7 @@ import { StatusBanner } from '@/components/status-banner';
 import { useHealth } from '@/hooks/use-health';
 import type { DashboardData } from '@/lib/dashboard/aggregate';
 import type { Overview } from '@/lib/dashboard/overview';
+import { planNextChange } from '@/lib/dashboard/planner';
 import { withDns } from '@/lib/dashboard/readiness';
 
 const RANGE_LABEL: Record<Range, string> = {
@@ -100,6 +102,15 @@ export default function DomainPage() {
   const entry = overview?.domains.find((d) => d.domain === domain);
   const readiness =
     entry && dns ? withDns(entry.readiness, dns) : entry?.readiness;
+  // undefined = the live record is unknown (lookup failed): no plan then.
+  const plan =
+    readiness && dns
+      ? planNextChange(
+          domain,
+          dns.dmarc.lookupFailed ? undefined : dns.dmarc.record,
+          readiness,
+        )
+      : null;
   const t = data?.totals;
   const rate = t ? passRate(t) : 0;
 
@@ -142,6 +153,8 @@ export default function DomainPage() {
               aria-busy={loading}
             >
               <ReadinessCard readiness={readiness} dnsLoading={dnsLoading} />
+
+              {plan && <ChangePlanCard plan={plan} />}
 
               <section aria-label="Trends" className="space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
