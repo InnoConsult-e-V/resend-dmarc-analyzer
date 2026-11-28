@@ -64,18 +64,19 @@ function isLoopbackOrigin(origin: string): boolean {
   }
 }
 
-function forbidden() {
-  return new NextResponse('Forbidden', { status: 403 });
+function forbidden(reason: string) {
+  // The reason is a fixed label (never request data) to make blocks diagnosable.
+  return new NextResponse(`Forbidden (${reason})`, { status: 403 });
 }
 
 export function proxy(request: NextRequest) {
   const host = request.headers.get('host') ?? '';
   if (!LOOPBACK_HOSTNAMES.has(hostnameOf(host).toLowerCase())) {
-    return forbidden();
+    return forbidden('host');
   }
 
   if (hasNonLocalProxyHeaders(request)) {
-    return forbidden();
+    return forbidden('proxy headers');
   }
 
   // The OAuth redirect back from login.microsoftonline.com is a cross-site
@@ -84,13 +85,25 @@ export function proxy(request: NextRequest) {
     request.method === 'GET' &&
     request.nextUrl.pathname === '/api/auth/callback';
 
-  if (request.nextUrl.pathname.startsWith('/api/') && !isAuthCallback) {
+  // Starting sign-in is a plain link click that only redirects to Microsoft
+  // (state + PKCE protect the callback), so a top-level navigation from
+  // another origin, e.g. a link opened from an editor or terminal, is fine.
+  const isLoginNavigation =
+    request.method === 'GET' &&
+    request.nextUrl.pathname === '/api/auth/login' &&
+    request.headers.get('sec-fetch-mode') === 'navigate';
+
+  if (
+    request.nextUrl.pathname.startsWith('/api/') &&
+    !isAuthCallback &&
+    !isLoginNavigation
+  ) {
     const origin = request.headers.get('origin');
     if (origin && !isLoopbackOrigin(origin)) {
-      return forbidden();
+      return forbidden('origin');
     }
     if (request.headers.get('sec-fetch-site') === 'cross-site') {
-      return forbidden();
+      return forbidden('cross-site');
     }
   }
 

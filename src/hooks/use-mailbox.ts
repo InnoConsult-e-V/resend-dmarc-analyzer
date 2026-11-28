@@ -50,9 +50,14 @@ export function useMailbox() {
   useEffect(() => {
     loadAuth();
     // Surface a failed sign-in (the callback redirects with ?auth_error=...).
-    const code = new URLSearchParams(window.location.search).get('auth_error');
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('auth_error');
+    const detail = params.get('auth_detail');
     if (code) {
-      setAuthError(AUTH_ERRORS[code] ?? 'Sign-in failed.');
+      const base = AUTH_ERRORS[code] ?? 'Sign-in failed.';
+      setAuthError(
+        detail && /^AADSTS\d{1,7}$/.test(detail) ? `${base} (${detail})` : base,
+      );
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, [loadAuth]);
