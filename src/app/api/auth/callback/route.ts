@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { getGraphConfig } from '@/lib/config';
-import { exchangeCode } from '@/lib/graph/auth';
+import { AuthError, exchangeCode } from '@/lib/graph/auth';
 import { resetAccessToken } from '@/lib/graph/client';
 import { writeAuth } from '@/lib/graph/token-store';
 
@@ -8,7 +8,11 @@ export const dynamic = 'force-dynamic';
 
 const AUTH_COOKIE = 'dmarc_auth';
 
-function home(request: NextRequest, error?: string): NextResponse {
+function home(
+  request: NextRequest,
+  error?: string,
+  detail?: string,
+): NextResponse {
   let origin = request.nextUrl.origin;
   try {
     origin = new URL(getGraphConfig().redirectUri).origin;
@@ -16,7 +20,12 @@ function home(request: NextRequest, error?: string): NextResponse {
     // fall back to the request origin
   }
   const response = NextResponse.redirect(
-    new URL(error ? `/?auth_error=${error}` : '/', origin),
+    new URL(
+      error
+        ? `/?auth_error=${error}${detail ? `&auth_detail=${detail}` : ''}`
+        : '/',
+      origin,
+    ),
   );
   response.cookies.delete({ name: AUTH_COOKIE, path: '/api/auth' });
   return response;
@@ -56,7 +65,13 @@ export async function GET(request: NextRequest) {
     });
     resetAccessToken();
     return home(request);
-  } catch {
-    return home(request, 'exchange');
+  } catch (err) {
+    return home(
+      request,
+      'exchange',
+      err instanceof AuthError && /^AADSTS\d{1,7}$/.test(err.code)
+        ? err.code
+        : undefined,
+    );
   }
 }

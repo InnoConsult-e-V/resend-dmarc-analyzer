@@ -22,6 +22,8 @@ export class AuthError extends Error {
     message: string,
     /** True when Microsoft says the refresh token is no longer valid. */
     readonly invalidGrant = false,
+    /** Microsoft's AADSTS error code, if any (safe to show). */
+    readonly code = '',
   ) {
     super(message);
   }
@@ -103,15 +105,22 @@ async function tokenRequest(params: Record<string, string>) {
 
   if (!res.ok) {
     let invalidGrant = false;
+    let aadsts = '';
     try {
-      invalidGrant =
-        ((await res.json()) as { error?: string }).error === 'invalid_grant';
+      const body = (await res.json()) as {
+        error?: string;
+        error_description?: string;
+      };
+      invalidGrant = body.error === 'invalid_grant';
+      // Only the AADSTS error code is kept, never the free-text description.
+      aadsts = body.error_description?.match(/AADSTS\d{1,7}/)?.[0] ?? '';
     } catch {
       // ignore: body is never surfaced
     }
     throw new AuthError(
-      `Microsoft sign-in failed (HTTP ${res.status})`,
+      `Microsoft sign-in failed (HTTP ${res.status}${aadsts ? `, ${aadsts}` : ''})`,
       invalidGrant,
+      aadsts,
     );
   }
 
